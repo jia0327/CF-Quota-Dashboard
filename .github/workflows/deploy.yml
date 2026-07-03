@@ -25,6 +25,31 @@ jobs:
         working-directory: worker
         run: npm run typecheck
 
+      - name: Resolve KV namespace
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
+        run: |
+          if [ -n "$KV_NAMESPACE_ID" ]; then
+            ID="$KV_NAMESPACE_ID"
+          else
+            ID=$(npx wrangler kv namespace list --json | node -e "
+              const list = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+              const ns = list.find((n) => n.title === 'KV');
+              process.stdout.write(ns?.id ?? '');
+            ")
+            if [ -z "$ID" ]; then
+              ID=$(npx wrangler kv namespace create KV --json | node -e "
+                process.stdout.write(JSON.parse(require('fs').readFileSync(0, 'utf8')).id);
+              ")
+              echo "Created KV namespace: $ID"
+            fi
+          fi
+          sed -i "s/YOUR_KV_NAMESPACE_ID/$ID/" wrangler.toml
+          echo "Using KV namespace: $ID"
+
       - name: Deploy Worker
         working-directory: worker
         run: npx wrangler deploy

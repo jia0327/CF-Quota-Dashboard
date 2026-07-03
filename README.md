@@ -296,6 +296,7 @@ curl.exe -X POST "https://your-worker.workers.dev/cron/fetch" -H "Cookie: cfqd_s
 |--------|------|
 | `CLOUDFLARE_API_TOKEN` | 托管账号的 API Token，需 **Workers 部署** 权限 |
 | `CLOUDFLARE_ACCOUNT_ID` | 托管 Worker 的 Account ID |
+| `KV_NAMESPACE_ID` | *(可选)* KV 命名空间 ID；未设置时 CI 会自动查找名为 `KV` 的命名空间，不存在则创建 |
 
 ### 流程
 
@@ -303,7 +304,7 @@ curl.exe -X POST "https://your-worker.workers.dev/cron/fetch" -H "Cookie: cfqd_s
 2. `npm run typecheck`
 3. `npx wrangler deploy`
 
-> **注意**：GitHub Actions **不会**自动设置 `PASSWORD` 等 Worker Secret。首次 CI 部署后，仍需在本地或 Dashboard 执行 `wrangler secret put PASSWORD`。KV namespace `id` 需已写入仓库中的 `wrangler.toml`。
+> **注意**：GitHub Actions **不会**自动设置 `PASSWORD` 等 Worker Secret。首次 CI 部署后，仍需在本地或 Dashboard 执行 `wrangler secret put PASSWORD`。CI 会在部署前自动解析 KV 命名空间（优先使用 `KV_NAMESPACE_ID` secret，否则查找或创建名为 `KV` 的命名空间）；本地部署仍需在 `wrangler.toml` 中填入有效 `id`。
 
 ## 免费额度默认值
 
