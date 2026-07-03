@@ -164,6 +164,33 @@ a:hover {
   margin-left: auto;
 }
 
+.topbar-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.35rem 0.625rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.2s ease;
+}
+
+.topbar-link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.topbar-link i {
+  font-size: 0.875rem;
+}
+
 .dashboard-main {
   width: 100%;
   max-width: min(100%, 1080px);
