@@ -1,0 +1,10 @@
+{
+  "name": "cf-quota-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "npm run typecheck --prefix worker",
+    "deploy": "npm run deploy --prefix worker -- --config ../wrangler.toml",
+    "dev": "npm run dev --prefix worker -- --config ../wrangler.toml"
+  }
+}

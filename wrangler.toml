@@ -1,8 +1,8 @@
-# Local deploy from worker/ (cd worker && npm run deploy).
-# Dashboard one-click, GitHub Actions, and root npm run deploy use ../wrangler.toml instead.
+# Primary Wrangler config — repo-root deploy (Dashboard one-click, GitHub Actions, npm run deploy).
+# For local deploy from worker/, use worker/wrangler.toml instead.
 
 name = "cf-quota-dashboard"
-main = "src/index.ts"
+main = "worker/src/index.ts"
 compatibility_date = "2026-01-15"
 
 # KV binding — variable name MUST be "KV" (uppercase). Do not rename.
@@ -12,7 +12,7 @@ binding = "KV"
 id = "YOUR_KV_NAMESPACE_ID"
 
 [assets]
-directory = "../frontend"
+directory = "frontend"
 binding = "ASSETS"
 
 # Cron fallback refresh when dashboard is not visited (every 6 hours)

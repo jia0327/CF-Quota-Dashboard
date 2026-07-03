@@ -8,7 +8,7 @@
 #   KV_NAMESPACE_ID       - KV namespace id; if unset, CI finds or creates title "KV"
 #   PASSWORD              - Admin login code; synced to Worker via wrangler secret put
 #
-# wrangler.toml keeps placeholder YOUR_KV_NAMESPACE_ID; the Resolve KV step patches it at deploy time.
+# wrangler.toml at repo root keeps placeholder YOUR_KV_NAMESPACE_ID; Resolve KV patches it at deploy time.
 # Worker secrets (PASSWORD) are NOT set from GitHub unless PASSWORD secret is configured below.
 
 name: Deploy CF Quota Dashboard
@@ -38,9 +38,8 @@ jobs:
         working-directory: worker
         run: npm run typecheck
 
-      # Replace YOUR_KV_NAMESPACE_ID in wrangler.toml before deploy.
+      # Replace YOUR_KV_NAMESPACE_ID in root wrangler.toml before deploy.
       - name: Resolve KV namespace
-        working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -84,7 +83,7 @@ jobs:
 
       - name: Deploy Worker
         working-directory: worker
-        run: npx wrangler deploy
+        run: npx wrangler deploy --config ../wrangler.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -98,7 +97,7 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
         run: |
           if [ -n "$PASSWORD" ]; then
-            echo "$PASSWORD" | npx wrangler secret put PASSWORD
+            echo "$PASSWORD" | npx wrangler secret put PASSWORD --config ../wrangler.toml
             echo "PASSWORD secret synced to Worker"
           else
             echo "PASSWORD repository secret not set; Worker remains in Dev mode until you run: wrangler secret put PASSWORD"

@@ -115,16 +115,18 @@
 
 ## 🛠️ 部署指南
 
+**一键部署（推荐）：** 点击页首 [Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/?url=https://github.com/cf-fork-div/CF-Quota-Dashboard) 按钮，Dashboard 会从仓库根目录读取 `wrangler.toml` 并打包 `frontend/` 静态资源。
+
 ```bash
 git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
-cd CF-Quota-Dashboard/worker
-npm install
-# 创建 KV → 替换 worker/wrangler.toml 中的 YOUR_KV_NAMESPACE_ID
-npx wrangler secret put PASSWORD
+cd CF-Quota-Dashboard
+npm install --prefix worker
+# 创建 KV → 替换根目录 wrangler.toml 中的 YOUR_KV_NAMESPACE_ID
+npx wrangler secret put PASSWORD --config wrangler.toml
 npm run deploy
 ```
 
-生产环境需绑定 KV 命名空间（`KV`）并设置 `PASSWORD` Secret。配置文件路径为 **`worker/wrangler.toml`**（非仓库根目录）。
+生产环境需绑定 KV 命名空间（`KV`）并设置 `PASSWORD` Secret。主配置文件为仓库根目录 **`wrangler.toml`**；在 `worker/` 目录内单独部署时仍可使用 **`worker/wrangler.toml`**。
 
 👉 **完整步骤、环境变量、GitHub Actions 与故障排查见 [docs/DEPLOY.md](docs/DEPLOY.md)**
 

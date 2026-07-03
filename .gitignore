@@ -5,3 +5,4 @@ dist/
 .env
 *.log
 worker/wrangler.deploy.toml
+wrangler.deploy.toml
