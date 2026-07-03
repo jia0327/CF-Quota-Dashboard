@@ -44,11 +44,11 @@ export async function setupNavAuth(navEl) {
   const me = await checkAuth();
 
   if (!me.authEnabled) {
-    navEl.innerHTML = `<span class="chip chip--dev">Dev mode</span>`;
+    navEl.innerHTML = `<span class="chip chip--dev">开发模式</span>`;
   } else if (me.authenticated) {
     navEl.innerHTML = `
       <span class="form-hint">${me.username}</span>
-      <button id="logout-btn" class="btn btn-ghost btn-sm">Logout</button>
+      <button id="logout-btn" class="btn btn-ghost btn-sm">退出登录</button>
     `;
   } else {
     navEl.innerHTML = `<a href="/login" class="nav-link">登录</a>`;
