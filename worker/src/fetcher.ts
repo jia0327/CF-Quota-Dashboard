@@ -6,7 +6,7 @@ const GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 const REST_BASE = 'https://api.cloudflare.com/client/v4';
 
 /** Estimated external subrequests per account (GraphQL batches + REST). */
-export const SUBREQUESTS_PER_ACCOUNT = 5;
+export const SUBREQUESTS_PER_ACCOUNT = 6;
 
 function formatUtcDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -84,7 +84,7 @@ async function restRequestRaw<T>(token: string, path: string): Promise<CfApiResp
 }
 
 interface ViewerAccount {
-  workersInvocationsAdaptive?: Array<{ sum?: { requests?: number } }>;
+  workersInvocationsAdaptive?: Array<{ sum?: { requests?: number; cpuTimeUs?: number } }>;
   kvOperationsAdaptiveGroups?: Array<{
     dimensions?: { actionType?: string };
     sum?: { requests?: number };
@@ -105,14 +105,29 @@ interface ViewerAccount {
     sum?: { totalSessionDurationMs?: number };
   }>;
   workersAnalyticsEngineAdaptiveGroups?: Array<{ count?: number }>;
-  logExplorerIngestionAdaptiveGroups?: Array<{ sum?: { totalBytes?: number } }>;
+  logExplorerIngestionAdaptiveGroups?: Array<{ count?: number; sum?: { totalBytes?: number } }>;
   durableObjectsInvocationsAdaptiveGroups?: Array<{ sum?: { requests?: number } }>;
   durableObjectsPeriodicGroups?: Array<{
     sum?: { duration?: number; rowsRead?: number; rowsWritten?: number };
   }>;
   durableObjectsSqlStorageGroups?: Array<{ max?: { storedBytes?: number } }>;
-  vectorizeV2QueriesAdaptiveGroups?: Array<{ count?: number; sum?: { queriedDimensions?: number; billableQueriedDimensions?: number } }>;
-  vectorizeV2StorageAdaptiveGroups?: Array<{ max?: { storedDimensions?: number; vectorDimensions?: number } }>;
+  vectorizeV2QueriesAdaptiveGroups?: Array<{
+    count?: number;
+    sum?: { queriedVectorDimensions?: number };
+  }>;
+  vectorizeQueriesAdaptiveGroups?: Array<{
+    count?: number;
+    sum?: { queriedVectorDimensions?: number };
+  }>;
+  vectorizeV2StorageAdaptiveGroups?: Array<{
+    max?: { storedVectorDimensions?: number; storedDimensions?: number };
+    dimensions?: { indexName?: string; datetime?: string };
+  }>;
+  vectorizeStorageAdaptiveGroups?: Array<{
+    max?: { storedDimensions?: number };
+    dimensions?: { indexName?: string; datetime?: string };
+  }>;
+  workersBuildsBuildMinutesAdaptiveGroups?: Array<{ sum?: { buildMinutes?: number } }>;
   pagesFunctionsInvocationsAdaptiveGroups?: Array<{ sum?: { requests?: number } }>;
 }
 
@@ -163,6 +178,19 @@ function metricNote(prefix: string, partialErrors: string[]): string | undefined
   return match ? parseApiErrorMessage(match) : undefined;
 }
 
+function vectorizeMetricNote(error: string | undefined): string | undefined {
+  if (!error) return undefined;
+  const message = parseApiErrorMessage(error);
+  if (/authentication error|authenticate|authorization|10000/i.test(message)) {
+    return '需要 Account Analytics: Read 权限（GraphQL）；REST 索引查询另需 Account → Vectorize → Read';
+  }
+  return message;
+}
+
+function isUnknownGraphqlFieldError(error: string): boolean {
+  return /unknown field/i.test(parseApiErrorMessage(error));
+}
+
 async function fetchCoreMetrics(
   token: string,
   accountId: string,
@@ -177,7 +205,7 @@ async function fetchCoreMetrics(
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
         workersInvocationsAdaptive(limit: 1, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
-          sum { requests }
+          sum { requests cpuTimeUs }
         }
         queueMessageOperationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
           sum { billableOperations }
@@ -191,14 +219,18 @@ async function fetchCoreMetrics(
         workflowsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
           count
         }
-        browserRenderingBrowserTimeUsageAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+        browserRenderingBrowserTimeUsageAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
           sum { totalSessionDurationMs }
         }
         workersAnalyticsEngineAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
           count
         }
         logExplorerIngestionAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+          count
           sum { totalBytes }
+        }
+        workersBuildsBuildMinutesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+          sum { buildMinutes }
         }
         durableObjectsInvocationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
           sum { requests }
@@ -458,68 +490,172 @@ async function fetchVectorizeQueried(
   monthStart: string,
   nowIso: string,
 ): Promise<{ ok: true; value: number } | { ok: false; error: string }> {
-  const queriedQuery = `query VectorizeQueried($accountTag: String!, $monthStart: Time!, $now: Time!) {
+  const v2Query = `query VectorizeQueriedV2($accountTag: String!, $monthStart: Time!, $now: Time!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
         vectorizeV2QueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $now }) {
-          sum { billableQueriedDimensions }
+          sum { queriedVectorDimensions }
         }
       }
     }
   }`;
 
-  const result = await safeQuery('vectorize-queried', () =>
-    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, queriedQuery, {
+  const v2Result = await safeQuery('vectorize-queried', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, v2Query, {
       accountTag: accountId,
       monthStart,
       now: nowIso,
     }),
   );
 
-  if (!result.ok) return result;
+  if (v2Result.ok) {
+    const acc = getAccount(v2Result.data);
+    return {
+      ok: true,
+      value: sumGroups(acc.vectorizeV2QueriesAdaptiveGroups, (g) => g.sum?.queriedVectorDimensions),
+    };
+  }
 
-  const acc = getAccount(result.data);
+  const v1Query = `query VectorizeQueriedV1($accountTag: String!, $monthStart: Time!, $now: Time!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        vectorizeQueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $now }) {
+          sum { queriedVectorDimensions }
+        }
+      }
+    }
+  }`;
+
+  const v1Result = await safeQuery('vectorize-queried', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, v1Query, {
+      accountTag: accountId,
+      monthStart,
+      now: nowIso,
+    }),
+  );
+
+  if (!v1Result.ok) {
+    if (!isUnknownGraphqlFieldError(v1Result.error)) return v1Result;
+    const countQuery = `query VectorizeQueriedCount($accountTag: String!, $monthStart: Time!, $now: Time!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          vectorizeV2QueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $now }) {
+            count
+          }
+        }
+      }
+    }`;
+    const countResult = await safeQuery('vectorize-queried', () =>
+      graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, countQuery, {
+        accountTag: accountId,
+        monthStart,
+        now: nowIso,
+      }),
+    );
+    if (!countResult.ok) return countResult;
+    const accCount = getAccount(countResult.data);
+    return {
+      ok: true,
+      value: sumGroups(accCount.vectorizeV2QueriesAdaptiveGroups, (g) => g.count),
+    };
+  }
+
+  const acc = getAccount(v1Result.data);
   return {
     ok: true,
-    value: sumGroups(acc.vectorizeV2QueriesAdaptiveGroups, (g) => g.sum?.billableQueriedDimensions),
+    value: sumGroups(acc.vectorizeQueriesAdaptiveGroups, (g) => g.sum?.queriedVectorDimensions),
   };
 }
 
-interface VectorizeIndex {
-  name?: string;
-  config?: { dimensions?: number };
+function sumVectorizeStored(
+  groups: Array<{
+    max?: { storedVectorDimensions?: number; storedDimensions?: number };
+    dimensions?: { indexName?: string; datetime?: string };
+  }> | undefined,
+): number {
+  const latestByIndex = new Map<string, { dims: number; date: string }>();
+  for (const g of groups ?? []) {
+    const indexName = g.dimensions?.indexName ?? '';
+    const date = g.dimensions?.datetime ?? '';
+    const dims = g.max?.storedVectorDimensions ?? g.max?.storedDimensions ?? 0;
+    const prev = latestByIndex.get(indexName);
+    if (!prev || date > prev.date) {
+      latestByIndex.set(indexName, { dims, date });
+    }
+  }
+  return [...latestByIndex.values()].reduce((t, v) => t + v.dims, 0);
 }
 
-interface VectorizeIndexInfo {
-  dimensions?: number;
-  vectorCount?: number;
-}
-
-async function fetchVectorizeStoredRest(
+async function fetchVectorizeStored(
   token: string,
   accountId: string,
+  monthStart: string,
+  nowIso: string,
 ): Promise<{ ok: true; value: number } | { ok: false; error: string }> {
-  try {
-    const list = await restRequestRaw<VectorizeIndex[]>(
-      token,
-      `/accounts/${accountId}/vectorize/v2/indexes`,
-    );
-    let total = 0;
-    for (const idx of list.result ?? []) {
-      if (!idx.name) continue;
-      const info = await restRequestRaw<VectorizeIndexInfo>(
-        token,
-        `/accounts/${accountId}/vectorize/v2/indexes/${encodeURIComponent(idx.name)}/info`,
-      );
-      const dims = info.result?.dimensions ?? idx.config?.dimensions ?? 0;
-      const count = info.result?.vectorCount ?? 0;
-      total += dims * count;
+  const v2Query = `query VectorizeStoredV2($accountTag: String!, $monthStart: Time!, $now: Time!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        vectorizeV2StorageAdaptiveGroups(
+          limit: 10000,
+          filter: { datetime_geq: $monthStart, datetime_leq: $now },
+          orderBy: [datetime_DESC]
+        ) {
+          max { storedVectorDimensions storedDimensions }
+          dimensions { indexName datetime }
+        }
+      }
     }
-    return { ok: true, value: total };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `vectorize-stored: ${message}` };
+  }`;
+
+  const v2Result = await safeQuery('vectorize-stored', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, v2Query, {
+      accountTag: accountId,
+      monthStart,
+      now: nowIso,
+    }),
+  );
+
+  if (v2Result.ok) {
+    const acc = getAccount(v2Result.data);
+    return { ok: true, value: sumVectorizeStored(acc.vectorizeV2StorageAdaptiveGroups) };
   }
+
+  const v1Query = `query VectorizeStoredV1($accountTag: String!, $monthStart: Time!, $now: Time!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        vectorizeStorageAdaptiveGroups(
+          limit: 10000,
+          filter: { datetime_geq: $monthStart, datetime_leq: $now },
+          orderBy: [datetime_DESC]
+        ) {
+          max { storedDimensions }
+          dimensions { indexName datetime }
+        }
+      }
+    }
+  }`;
+
+  const v1Result = await safeQuery('vectorize-stored', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, v1Query, {
+      accountTag: accountId,
+      monthStart,
+      now: nowIso,
+    }),
+  );
+
+  if (!v1Result.ok) return v1Result;
+
+  const acc = getAccount(v1Result.data);
+  const latestByIndex = new Map<string, number>();
+  for (const g of acc.vectorizeStorageAdaptiveGroups ?? []) {
+    const indexName = g.dimensions?.indexName ?? '';
+    const dims = g.max?.storedDimensions ?? 0;
+    latestByIndex.set(indexName, dims);
+  }
+  return {
+    ok: true,
+    value: [...latestByIndex.values()].reduce((t, v) => t + v, 0),
+  };
 }
 
 async function fetchVectorizeMetrics(
@@ -535,7 +671,7 @@ async function fetchVectorizeMetrics(
   errors: string[];
 }> {
   const queriedResult = await fetchVectorizeQueried(token, accountId, monthStart, nowIso);
-  const storedResult = await fetchVectorizeStoredRest(token, accountId);
+  const storedResult = await fetchVectorizeStored(token, accountId, monthStart, nowIso);
   const errors: string[] = [];
   if (!queriedResult.ok) errors.push(queriedResult.error);
   if (!storedResult.ok) errors.push(storedResult.error);
@@ -634,7 +770,6 @@ async function fetchAllMetrics(
   if (!kvResult.ok) partialErrors.push(kvResult.error);
   else if (kvResult.errors.length) partialErrors.push(...kvResult.errors);
   if (!r2Result.ok) partialErrors.push(r2Result.error);
-  if (vectorizeResult.errors.length) partialErrors.push(...vectorizeResult.errors);
   if (!pagesResult.ok) partialErrors.push(pagesResult.error);
 
   const kvOpsOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-ops'));
@@ -658,7 +793,14 @@ async function fetchAllMetrics(
     (g) => g.sum?.totalSessionDurationMs,
   );
   const analyticsWrites = sumGroups(acc.workersAnalyticsEngineAdaptiveGroups, (g) => g.count);
+  const logsEvents = sumGroups(acc.logExplorerIngestionAdaptiveGroups, (g) => g.count);
   const logsBytes = sumGroups(acc.logExplorerIngestionAdaptiveGroups, (g) => g.sum?.totalBytes);
+  const workersBuildMinutes = sumGroups(
+    acc.workersBuildsBuildMinutesAdaptiveGroups,
+    (g) => g.sum?.buildMinutes,
+  );
+  const workersCpuUs = acc.workersInvocationsAdaptive?.[0]?.sum?.cpuTimeUs ?? 0;
+  const workersBuildsOk = Array.isArray(acc.workersBuildsBuildMinutesAdaptiveGroups);
 
   const doRequests = sumGroups(
     acc.durableObjectsInvocationsAdaptiveGroups,
@@ -755,6 +897,22 @@ async function fetchAllMetrics(
       pagesResult.ok,
       pagesResult.ok ? undefined : metricNote('pages', partialErrors),
     ),
+    workers_build_minutes: buildMetric(
+      'workers_build_minutes',
+      workersBuildMinutes,
+      limits.workers_build_minutes,
+      workersBuildsOk,
+      workersBuildsOk
+        ? undefined
+        : 'Workers Builds minutes unavailable via GraphQL for this account',
+    ),
+    workers_build_concurrent: buildMetric(
+      'workers_build_concurrent',
+      0,
+      limits.workers_build_concurrent,
+      false,
+      'No API for concurrent build slots; Free plan limit is 1 slot',
+    ),
     pages_requests: buildMetric('pages_requests', pagesRequests, limits.pages_requests),
     ai_neurons: buildMetric('ai_neurons', aiNeurons, limits.ai_neurons),
     queues_ops: buildMetric('queues_ops', queuesOps, limits.queues_ops),
@@ -763,14 +921,18 @@ async function fetchAllMetrics(
       vectorizeResult.vectorizeQueried,
       limits.vectorize_queried_dims,
       vectorizeResult.queriedOk,
-      vectorizeResult.queriedOk ? undefined : metricNote('vectorize-queried', partialErrors),
+      vectorizeResult.queriedOk
+        ? undefined
+        : vectorizeMetricNote(vectorizeResult.errors.find((e) => e.startsWith('vectorize-queried:'))),
     ),
     vectorize_stored_dims: buildMetric(
       'vectorize_stored_dims',
       vectorizeResult.vectorizeStored,
       limits.vectorize_stored_dims,
       vectorizeResult.storedOk,
-      vectorizeResult.storedOk ? undefined : metricNote('vectorize-stored', partialErrors),
+      vectorizeResult.storedOk
+        ? undefined
+        : vectorizeMetricNote(vectorizeResult.errors.find((e) => e.startsWith('vectorize-stored:'))),
     ),
     hyperdrive_queries: buildMetric('hyperdrive_queries', hyperdriveQueries, limits.hyperdrive_queries),
     workflows_invocations: buildMetric('workflows_invocations', workflowsInvocations, limits.workflows_invocations),
@@ -780,13 +942,29 @@ async function fetchAllMetrics(
     durable_objects_rows_written: buildMetric('durable_objects_rows_written', doRowsWritten, limits.durable_objects_rows_written),
     durable_objects_sql_storage_gb: buildMetric('durable_objects_sql_storage_gb', doSqlStorage, limits.durable_objects_sql_storage_gb),
     browser_minutes: buildMetric('browser_minutes', browserMs / 60000, limits.browser_minutes),
+    workers_cpu_ms: buildMetric(
+      'workers_cpu_ms',
+      workersCpuUs / 1000,
+      limits.workers_cpu_ms,
+      false,
+      'Free tier caps 10ms CPU per request, not a daily total; API exposes aggregate cpuTimeUs only',
+    ),
     analytics_engine_writes: buildMetric('analytics_engine_writes', analyticsWrites, limits.analytics_engine_writes),
+    workers_logs_events: buildMetric(
+      'workers_logs_events',
+      logsEvents,
+      limits.workers_logs_events,
+      logsEvents > 0 || acc.logExplorerIngestionAdaptiveGroups !== undefined,
+      logsEvents > 0
+        ? undefined
+        : 'GraphQL exposes count when Log Explorer ingestion is enabled; Free limit 200k events/day',
+    ),
     workers_logs_bytes: buildMetric(
       'workers_logs_bytes',
       logsBytes,
       limits.workers_logs_bytes,
       false,
-      'Event count not exposed via API; bytes shown for reference only',
+      'Bytes only; see workers_logs_events for event count when available',
     ),
   };
 

@@ -5,7 +5,10 @@ const API_BASE = window.location.origin;
 const GROUPS = [
   {
     title: 'Compute & Runtime',
-    keys: ['workers_requests', 'pages_requests', 'pages_builds', 'workflows_invocations', 'browser_minutes', 'ai_neurons'],
+    keys: [
+      'workers_requests', 'pages_requests', 'workers_build_minutes', 'workers_build_concurrent',
+      'workers_cpu_ms', 'pages_builds', 'workflows_invocations', 'browser_minutes', 'ai_neurons',
+    ],
   },
   {
     title: 'Storage & Databases',
@@ -23,13 +26,14 @@ const GROUPS = [
   },
   {
     title: 'Analytics & Logs',
-    keys: ['analytics_engine_writes', 'workers_logs_bytes'],
+    keys: ['analytics_engine_writes', 'workers_logs_events', 'workers_logs_bytes'],
   },
 ];
 
 const SUMMARY_KEYS = [
   'workers_requests',
   'pages_requests',
+  'workers_build_minutes',
   'pages_builds',
   'd1_reads',
   'kv_reads',

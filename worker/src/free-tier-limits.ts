@@ -74,6 +74,18 @@ export const DEFAULT_FREE_TIER_LIMITS: FreeTierLimitsConfig = {
     unit: 'ops',
     label: 'R2 Class B Ops',
   },
+  workers_build_minutes: {
+    limit: 3_000,
+    period: 'monthly',
+    unit: 'minutes',
+    label: 'Workers Builds',
+  },
+  workers_build_concurrent: {
+    limit: 1,
+    period: 'total',
+    unit: 'slots',
+    label: 'Workers Build Slots',
+  },
   pages_builds: {
     limit: 500,
     period: 'monthly',
@@ -153,10 +165,16 @@ export const DEFAULT_FREE_TIER_LIMITS: FreeTierLimitsConfig = {
     label: 'DO SQL Storage',
   },
   browser_minutes: {
+    limit: 300,
+    period: 'monthly',
+    unit: 'minutes',
+    label: 'Browser Run',
+  },
+  workers_cpu_ms: {
     limit: 10,
     period: 'daily',
-    unit: 'minutes',
-    label: 'Browser Rendering',
+    unit: 'ms/req',
+    label: 'Workers CPU (per request)',
   },
   analytics_engine_writes: {
     limit: 100_000,
@@ -164,11 +182,17 @@ export const DEFAULT_FREE_TIER_LIMITS: FreeTierLimitsConfig = {
     unit: 'points',
     label: 'Analytics Engine Writes',
   },
+  workers_logs_events: {
+    limit: 200_000,
+    period: 'daily',
+    unit: 'events',
+    label: 'Workers Logs Events',
+  },
   workers_logs_bytes: {
-    limit: 0,
+    limit: 200_000,
     period: 'daily',
     unit: 'bytes',
-    label: 'Workers Logs Ingestion',
+    label: 'Workers Logs Ingestion (bytes)',
   },
 };
 
