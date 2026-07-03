@@ -62,6 +62,12 @@ export const DEFAULT_FREE_TIER_LIMITS: FreeTierLimitsConfig = {
     unit: 'GB',
     label: 'KV Storage',
   },
+  kv_namespaces: {
+    limit: 1_000,
+    period: 'total',
+    unit: 'namespaces',
+    label: 'KV Total Namespaces',
+  },
   r2_storage_gb: {
     limit: 10,
     period: 'monthly',

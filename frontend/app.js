@@ -13,6 +13,7 @@ const LABEL_ZH = {
   ai_neurons: 'Workers AI（Neurons）',
   workers_cpu_ms: 'Workers CPU（单次请求）',
   d1_databases: 'D1 数据库',
+  kv_namespaces: 'KV 命名空间',
   d1_reads: 'D1 读取（行）',
   d1_writes: 'D1 写入（行）',
   d1_storage_gb: 'D1 存储',
@@ -45,7 +46,12 @@ const SERVICE_GROUPS = [
     id: 'kv',
     title: 'KV',
     keys: ['kv_reads', 'kv_writes', 'kv_deletes', 'kv_lists', 'kv_storage_gb'],
-    metaFn: () => '',
+    metaFn: (quotas) => {
+      const ns = quotas?.kv_namespaces;
+      if (ns?.available) return `${ns.used.toLocaleString()} 个命名空间`;
+      if (ns?.note) return ns.note;
+      return '';
+    },
   },
   {
     id: 'd1',
@@ -155,39 +161,33 @@ function formatQuotaMeta(metric) {
   return `${used} / ${limit} · ${metric.pct}% · ${period}`;
 }
 
-function renderHeroSection(used, limit, pct) {
+function renderRequestQuotaCard(icon, label, used, limit, pct) {
   const width = Math.min(100, pct);
+  const detail = limit > 0
+    ? `${used.toLocaleString()} / ${limit.toLocaleString()}`
+    : '不可用';
   return `
-    <div class="hero-section" data-hero-pct="${pct}">
-      <div class="hero-section__header">
-        <span class="hero-section__label">总请求占比</span>
-        <span class="hero-section__pct">${pct}%</span>
+    <div class="mini-card mini-card--quota" data-hero-pct="${pct}">
+      <span class="mini-card__icon">${icon}</span>
+      <div class="mini-card__body">
+        <div class="mini-card__head">
+          <span class="mini-card__label">${label} 请求占比</span>
+          <span class="mini-card__pct">${pct}%</span>
+        </div>
+        <div class="progress-track progress-track--mini">
+          <div class="progress-bar-gradient" style="width:${width}%"></div>
+        </div>
+        <p class="mini-card__detail">${detail}</p>
       </div>
-      <div class="progress-track progress-track--hero">
-        <div class="progress-bar-gradient" style="width:${width}%"></div>
-      </div>
-      <p class="hero-section__detail">${used.toLocaleString()} / ${limit.toLocaleString()} 请求次数</p>
     </div>
   `;
 }
 
-function renderMiniCards(workersUsed, pagesUsed) {
+function renderRequestQuotaOverview(quotas) {
   return `
-    <div class="mini-cards">
-      <div class="mini-card">
-        <span class="mini-card__icon">🔶</span>
-        <div class="mini-card__info">
-          <span class="mini-card__label">Workers</span>
-          <span class="mini-card__value">${workersUsed.toLocaleString()}</span>
-        </div>
-      </div>
-      <div class="mini-card">
-        <span class="mini-card__icon">⚡</span>
-        <div class="mini-card__info">
-          <span class="mini-card__label">Pages</span>
-          <span class="mini-card__value">${pagesUsed.toLocaleString()}</span>
-        </div>
-      </div>
+    <div class="mini-cards mini-cards--quota">
+      ${renderRequestQuotaCard('🔶', 'Workers', quotas.workersUsed, quotas.workersLimit, quotas.workersPct)}
+      ${renderRequestQuotaCard('⚡', 'Pages', quotas.pagesUsed, quotas.pagesLimit, quotas.pagesPct)}
     </div>
   `;
 }
@@ -293,7 +293,14 @@ function renderAccountDetails(account) {
 
 function getAccountRequestHero(account) {
   if (account.status !== 'ok' || !account.quotas) {
-    return { totalUsed: 0, totalLimit: 0, pct: 0, workersUsed: 0, pagesUsed: 0 };
+    return {
+      workersUsed: 0,
+      workersLimit: 0,
+      workersPct: 0,
+      pagesUsed: 0,
+      pagesLimit: 0,
+      pagesPct: 0,
+    };
   }
   const w = account.quotas.workers_requests;
   const p = account.quotas.pages_requests;
@@ -301,14 +308,13 @@ function getAccountRequestHero(account) {
   const pagesUsed = p?.available ? p.used : 0;
   const workersLimit = w?.available ? w.limit : 0;
   const pagesLimit = p?.available ? p.limit : 0;
-  const totalUsed = workersUsed + pagesUsed;
-  const totalLimit = workersLimit + pagesLimit;
   return {
-    totalUsed,
-    totalLimit,
-    pct: calcPct(totalUsed, totalLimit),
     workersUsed,
+    workersLimit,
+    workersPct: calcPct(workersUsed, workersLimit),
     pagesUsed,
+    pagesLimit,
+    pagesPct: calcPct(pagesUsed, pagesLimit),
   };
 }
 
@@ -386,8 +392,7 @@ function renderAccountOverview(account) {
     .join('');
 
   return `
-    ${renderHeroSection(hero.totalUsed, hero.totalLimit, hero.pct)}
-    ${renderMiniCards(hero.workersUsed, hero.pagesUsed)}
+    ${renderRequestQuotaOverview(hero)}
     <div class="overview-summary">${summaryRows}</div>
   `;
 }

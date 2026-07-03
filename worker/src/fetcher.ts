@@ -13,7 +13,7 @@ const GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 const REST_BASE = 'https://api.cloudflare.com/client/v4';
 
 /** Estimated external subrequests per account (GraphQL batches + REST). */
-export const SUBREQUESTS_PER_ACCOUNT = 8;
+export const SUBREQUESTS_PER_ACCOUNT = 9;
 
 function formatUtcDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -255,6 +255,15 @@ function d1DatabaseMetricNote(error: string | undefined): string | undefined {
   return message;
 }
 
+function kvNamespaceMetricNote(error: string | undefined): string | undefined {
+  if (!error) return undefined;
+  const message = parseApiErrorMessage(error);
+  if (isAuthErrorMessage(message)) {
+    return '需要 API Token 权限：Account → Workers KV Storage → Read';
+  }
+  return message;
+}
+
 function isUnknownGraphqlFieldError(error: string): boolean {
   return /unknown field/i.test(parseApiErrorMessage(error));
 }
@@ -412,6 +421,37 @@ async function fetchD1DatabaseCount(
       const body = await restRequestRaw<unknown[]>(
         token,
         `/accounts/${accountId}/d1/database?per_page=100&page=${page}`,
+      );
+      const batch = body.result ?? [];
+      count += batch.length;
+      if (batch.length < 100) break;
+      page += 1;
+    }
+    return count;
+  });
+
+  if (!result.ok) return result;
+  return { ok: true, count: result.data };
+}
+
+async function fetchKvNamespaceCount(
+  token: string,
+  accountId: string,
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const result = await safeQuery('kv-namespaces', async () => {
+    const first = await restRequestRaw<unknown[]>(
+      token,
+      `/accounts/${accountId}/storage/kv/namespaces?per_page=100`,
+    );
+    const totalCount = first.result_info?.total_count;
+    if (typeof totalCount === 'number') return totalCount;
+
+    let count = (first.result ?? []).length;
+    let page = 2;
+    while (page <= 100) {
+      const body = await restRequestRaw<unknown[]>(
+        token,
+        `/accounts/${accountId}/storage/kv/namespaces?per_page=100&page=${page}`,
       );
       const batch = body.result ?? [];
       count += batch.length;
@@ -962,6 +1002,7 @@ async function fetchAllMetrics(
 
   const d1Result = await fetchD1Metrics(token, accountId, ranges.day, ranges.month);
   const d1DatabasesResult = await fetchD1DatabaseCount(token, accountId);
+  const kvNamespacesResult = await fetchKvNamespaceCount(token, accountId);
   const kvResult = await fetchKvMetrics(token, accountId, ranges.dayDate, ranges.monthDate);
   const r2Activation = await fetchR2ActivationStatus(token, accountId);
   const r2Result = await fetchR2Metrics(token, accountId, ranges.month);
@@ -1077,6 +1118,15 @@ async function fetchAllMetrics(
       limits.kv_storage_gb,
       kvStorageOk,
       kvStorageOk ? undefined : metricNote('kv-storage', partialErrors),
+    ),
+    kv_namespaces: buildMetric(
+      'kv_namespaces',
+      kvNamespacesResult.ok ? kvNamespacesResult.count : 0,
+      limits.kv_namespaces,
+      kvNamespacesResult.ok,
+      kvNamespacesResult.ok
+        ? undefined
+        : kvNamespaceMetricNote(kvNamespacesResult.error),
     ),
     r2_storage_gb: buildMetric(
       'r2_storage_gb',
