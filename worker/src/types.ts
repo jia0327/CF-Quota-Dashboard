@@ -137,6 +137,16 @@ export interface PublicAccount {
   apiToken: string;
 }
 
+/** Admin-editable dashboard settings stored in KV */
+export interface DashboardConfig {
+  /** Minimum minutes between quota API fetches per account (default: 20) */
+  refreshIntervalMinutes: number;
+}
+
+export interface PublicDashboardConfig {
+  refreshIntervalMinutes: number;
+}
+
 export interface FetchResult {
   quotas: QuotasMap;
   status: 'ok' | 'error';

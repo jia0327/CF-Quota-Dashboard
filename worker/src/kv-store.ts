@@ -1,5 +1,6 @@
 import type {
   AccountConfig,
+  DashboardConfig,
   NotificationChannel,
   PublicAccount,
   PublicNotificationChannel,
@@ -9,6 +10,10 @@ import type {
 const ACCOUNTS_KEY = 'ACCOUNTS';
 const SNAPSHOT_KEY = 'QUOTA_SNAPSHOT';
 const CHANNELS_KEY = 'NOTIFICATION_CHANNELS';
+const DASHBOARD_CONFIG_KEY = 'DASHBOARD_CONFIG';
+
+export const ALLOWED_REFRESH_INTERVALS = [15, 20, 30, 60, 120, 360] as const;
+export const DEFAULT_REFRESH_INTERVAL_MINUTES = 20;
 
 const SENSITIVE_CONFIG_KEYS = new Set([
   'webhookUrl',
@@ -196,4 +201,37 @@ export async function getChannelById(
 ): Promise<NotificationChannel | null> {
   const channels = await getChannels(kv);
   return channels.find((c) => c.id === id) ?? null;
+}
+
+function normalizeRefreshIntervalMinutes(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
+  if (
+    Number.isFinite(parsed) &&
+    (ALLOWED_REFRESH_INTERVALS as readonly number[]).includes(parsed)
+  ) {
+    return parsed;
+  }
+  return DEFAULT_REFRESH_INTERVAL_MINUTES;
+}
+
+export async function getDashboardConfig(kv: KVNamespace): Promise<DashboardConfig> {
+  const raw = await kv.get(DASHBOARD_CONFIG_KEY, 'json');
+  if (!raw || typeof raw !== 'object') {
+    return { refreshIntervalMinutes: DEFAULT_REFRESH_INTERVAL_MINUTES };
+  }
+  const data = raw as Partial<DashboardConfig>;
+  return {
+    refreshIntervalMinutes: normalizeRefreshIntervalMinutes(data.refreshIntervalMinutes),
+  };
+}
+
+export async function saveDashboardConfig(
+  kv: KVNamespace,
+  config: DashboardConfig,
+): Promise<DashboardConfig> {
+  const normalized: DashboardConfig = {
+    refreshIntervalMinutes: normalizeRefreshIntervalMinutes(config.refreshIntervalMinutes),
+  };
+  await kv.put(DASHBOARD_CONFIG_KEY, JSON.stringify(normalized));
+  return normalized;
 }

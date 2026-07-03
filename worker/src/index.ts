@@ -16,14 +16,18 @@ import {
   getAccounts,
   getChannelById,
   getChannels,
+  getDashboardConfig,
   getSnapshot,
   maskAccount,
   maskChannel,
   saveAccounts,
+  saveDashboardConfig,
   saveSnapshot,
   toggleChannel,
   updateAccount,
   updateChannel,
+  ALLOWED_REFRESH_INTERVALS,
+  DEFAULT_REFRESH_INTERVAL_MINUTES,
 } from './kv-store';
 import { fetchAccountQuotas, SUBREQUESTS_PER_ACCOUNT, verifyAccountCredentials } from './fetcher';
 import { getAlertThreshold } from './free-tier-limits';
@@ -45,9 +49,14 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.use('/api/*', cors({ credentials: true, origin: (origin) => origin ?? '*' }));
 
-function getCheckIntervalMinutes(env: Env): number {
-  const parsed = parseInt(env.ACCOUNT_CHECK_INTERVAL_MINUTES ?? '20', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20;
+async function getCheckIntervalMinutes(env: Env): Promise<number> {
+  const config = await getDashboardConfig(env.KV);
+  if (config.refreshIntervalMinutes > 0) {
+    return config.refreshIntervalMinutes;
+  }
+
+  const parsed = parseInt(env.ACCOUNT_CHECK_INTERVAL_MINUTES ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFRESH_INTERVAL_MINUTES;
 }
 
 function getMaxSubrequests(env: Env): number {
@@ -206,6 +215,39 @@ app.get('/api/snapshot', async (c) => {
   return c.json(snapshot ?? { lastUpdated: null, accounts: [] });
 });
 
+app.get('/api/config', async (c) => {
+  const config = await getDashboardConfig(c.env.KV);
+  return c.json({
+    refreshIntervalMinutes: config.refreshIntervalMinutes,
+    allowedIntervals: [...ALLOWED_REFRESH_INTERVALS],
+    defaultIntervalMinutes: DEFAULT_REFRESH_INTERVAL_MINUTES,
+  });
+});
+
+app.put('/api/config', requireAuth, async (c) => {
+  const body = await c.req.json<{ refreshIntervalMinutes?: number }>();
+  if (body.refreshIntervalMinutes === undefined) {
+    return c.json({ error: 'refreshIntervalMinutes is required' }, 400);
+  }
+
+  const parsed = parseInt(String(body.refreshIntervalMinutes), 10);
+  if (!(ALLOWED_REFRESH_INTERVALS as readonly number[]).includes(parsed)) {
+    return c.json(
+      {
+        error: `refreshIntervalMinutes must be one of: ${ALLOWED_REFRESH_INTERVALS.join(', ')}`,
+      },
+      400,
+    );
+  }
+
+  const config = await saveDashboardConfig(c.env.KV, { refreshIntervalMinutes: parsed });
+  return c.json({
+    refreshIntervalMinutes: config.refreshIntervalMinutes,
+    allowedIntervals: [...ALLOWED_REFRESH_INTERVALS],
+    defaultIntervalMinutes: DEFAULT_REFRESH_INTERVAL_MINUTES,
+  });
+});
+
 const VALID_CHANNEL_TYPES: ChannelType[] = [
   'wecom',
   'feishu',
@@ -313,7 +355,7 @@ export async function runQuotaFetch(env: Env, options?: { force?: boolean }): Pr
   const previousSnapshot = await getSnapshot(env.KV);
   const limitsJson = env.FREE_TIER_LIMITS;
 
-  const intervalMs = getCheckIntervalMinutes(env) * 60 * 1000;
+  const intervalMs = (await getCheckIntervalMinutes(env)) * 60 * 1000;
   const maxSubrequests = getMaxSubrequests(env);
   const force = options?.force === true;
   const now = Date.now();

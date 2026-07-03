@@ -2,6 +2,20 @@ import { setupNavAuth, authFetch, redirectToLogin } from './auth.js';
 
 const API_BASE = window.location.origin;
 
+const REFRESH_INTERVAL_LABELS = {
+  15: '15 分钟',
+  20: '20 分钟',
+  30: '30 分钟',
+  60: '1 小时',
+  120: '2 小时',
+  360: '6 小时',
+};
+
+let dashboardConfig = { refreshIntervalMinutes: 20 };
+let autoRefreshTimer = null;
+let autoRefreshHintTimer = null;
+let nextAutoRefreshAt = null;
+
 const LABEL_ZH = {
   workers_requests: 'Workers 请求数',
   pages_requests: 'Pages 请求',
@@ -80,6 +94,17 @@ const OVERVIEW_SUMMARY_KEYS = [
   'r2_storage_gb',
   'ai_neurons',
 ];
+
+const METRIC_ICONS = {
+  workers_requests: '🔶',
+  pages_requests: '⚡',
+  workers_build_minutes: '🔨',
+  pages_builds: '📦',
+  d1_reads: '🗄️',
+  kv_reads: '🔑',
+  r2_storage_gb: '☁️',
+  ai_neurons: '🤖',
+};
 
 const OTHER_GROUPS = [
   {
@@ -192,21 +217,52 @@ function formatQuotaMeta(metric) {
   return `${used} / ${limit} · ${metric.pct}% · ${period}`;
 }
 
-function renderRequestQuotaCard(icon, label, used, limit, pct) {
-  const detail = limit > 0
-    ? `${used.toLocaleString()} / ${limit.toLocaleString()}`
-    : '不可用';
+function renderMetricRingCard(metricKey, metric, ringSize = 48, overrides = {}) {
+  const showWhenUnavailable = overrides.showWhenUnavailable ?? false;
+  if (!showWhenUnavailable && !metric?.available) return '';
+
+  const icon = overrides.icon ?? METRIC_ICONS[metricKey] ?? '📊';
+  const label = overrides.label ?? getLabelZh(metricKey, metric);
+  const used = metric?.used ?? 0;
+  const limit = metric?.limit ?? 0;
+  const unit = metric?.unit;
+  const pct = Number(metric?.pct) || calcPct(used, limit);
+  const formatNum = (v) => (overrides.rawNumbers ? v.toLocaleString() : formatValue(v, unit));
+  const usedDisplay = formatNum(used);
+  const detail = limit > 0 ? `${formatNum(used)} / ${formatNum(limit)}` : '不可用';
+
   return `
     <div class="mini-card mini-card--quota mini-card--ring" data-hero-pct="${pct}">
       <span class="mini-card__icon">${icon}</span>
       <div class="mini-card__body">
         <span class="mini-card__label">${label}</span>
-        <span class="mini-card__value">${used.toLocaleString()}</span>
+        <span class="mini-card__value">${usedDisplay}</span>
         <p class="mini-card__detail">${detail}</p>
       </div>
-      ${renderRingProgress(pct)}
+      ${renderRingProgress(pct, ringSize)}
     </div>
   `;
+}
+
+function renderRequestQuotaCard(icon, label, used, limit, pct) {
+  const key = label === 'Workers' ? 'workers_requests' : 'pages_requests';
+  return renderMetricRingCard(key, { available: true, used, limit, pct }, 56, {
+    icon,
+    label,
+    rawNumbers: true,
+    showWhenUnavailable: true,
+  });
+}
+
+function renderOverviewSummaryCards(quotas, account) {
+  const cards = OVERVIEW_SUMMARY_KEYS
+    .filter((k) => !(k.startsWith('r2_') && isR2Inactive(account)))
+    .map((k) => renderMetricRingCard(k, quotas[k]))
+    .filter(Boolean)
+    .join('');
+
+  if (!cards) return '';
+  return `<div class="mini-cards mini-cards--metrics">${cards}</div>`;
 }
 
 function renderRequestQuotaOverview(quotas) {
@@ -411,15 +467,11 @@ function renderAccountOverview(account) {
   if (account.status !== 'ok' || !account.quotas) return '';
 
   const hero = getAccountRequestHero(account);
-  const summaryRows = OVERVIEW_SUMMARY_KEYS
-    .filter((k) => !(k.startsWith('r2_') && isR2Inactive(account)))
-    .map((k) => renderQuotaRow(k, account.quotas[k]))
-    .filter(Boolean)
-    .join('');
+  const summaryCards = renderOverviewSummaryCards(account.quotas, account);
 
   return `
     ${renderRequestQuotaOverview(hero)}
-    <div class="overview-summary">${summaryRows}</div>
+    ${summaryCards}
   `;
 }
 
@@ -460,6 +512,95 @@ function applyHeroGradients(root) {
 async function fetchSnapshot() {
   const resp = await fetch(`${API_BASE}/api/snapshot`);
   return resp.json();
+}
+
+async function loadDashboardConfig() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/config`);
+    if (!resp.ok) return dashboardConfig;
+    const data = await resp.json();
+    dashboardConfig = {
+      refreshIntervalMinutes: data.refreshIntervalMinutes ?? 20,
+    };
+    return dashboardConfig;
+  } catch {
+    return dashboardConfig;
+  }
+}
+
+function formatIntervalLabel(minutes) {
+  return REFRESH_INTERVAL_LABELS[minutes] || `${minutes} 分钟`;
+}
+
+function updateAutoRefreshHint() {
+  const hintEl = document.getElementById('auto-refresh-hint');
+  if (!hintEl || !nextAutoRefreshAt) return;
+
+  const remainingMs = nextAutoRefreshAt - Date.now();
+  if (remainingMs <= 0) {
+    hintEl.textContent = ` · 自动刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（即将刷新）`;
+    return;
+  }
+
+  const totalSec = Math.ceil(remainingMs / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  const countdown = min > 0 ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
+  hintEl.textContent = ` · 自动刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（${countdown} 后）`;
+}
+
+function clearAutoRefreshTimers() {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (autoRefreshHintTimer) {
+    clearInterval(autoRefreshHintTimer);
+    autoRefreshHintTimer = null;
+  }
+}
+
+async function runAutoRefreshCycle() {
+  try {
+    const meResp = await fetch(`${API_BASE}/api/me`, { credentials: 'include' });
+    const me = await meResp.json();
+    if (me.authenticated || me.devMode) {
+      const resp = await authFetch(`${API_BASE}/cron/fetch`, { method: 'POST' });
+      const data = await resp.json();
+      await loadDashboard();
+      const statsEl = document.getElementById('refresh-stats');
+      if (statsEl && data.refreshStats) {
+        const s = data.refreshStats;
+        statsEl.textContent = ` · 自动刷新 ${s.refreshed}/${s.refreshed + s.cached + s.failed}`;
+      }
+      return;
+    }
+  } catch {
+    /* fall through to snapshot-only refresh */
+  }
+
+  await loadDashboard();
+}
+
+function setupDashboardAutoRefresh() {
+  clearAutoRefreshTimers();
+
+  const hintEl = document.getElementById('auto-refresh-hint');
+  if (!document.getElementById('accounts-grid')) return;
+
+  const intervalMs = dashboardConfig.refreshIntervalMinutes * 60 * 1000;
+  nextAutoRefreshAt = Date.now() + intervalMs;
+  updateAutoRefreshHint();
+
+  autoRefreshHintTimer = setInterval(updateAutoRefreshHint, 1000);
+  autoRefreshTimer = setInterval(async () => {
+    nextAutoRefreshAt = Date.now() + intervalMs;
+    await runAutoRefreshCycle();
+  }, intervalMs);
+
+  if (hintEl) {
+    hintEl.textContent = ` · 自动刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}`;
+  }
 }
 
 async function refreshQuotas() {
@@ -625,6 +766,63 @@ async function verifyAccountForm() {
   }
 }
 
+async function loadDashboardSettings() {
+  const form = document.getElementById('settings-form');
+  if (!form) return;
+
+  try {
+    const resp = await authFetch(`${API_BASE}/api/config`);
+    const data = await resp.json();
+    if (form.refreshIntervalMinutes) {
+      form.refreshIntervalMinutes.value = String(data.refreshIntervalMinutes ?? 20);
+    }
+  } catch (err) {
+    const msg = document.getElementById('settings-message');
+    if (msg && err.status === 401) {
+      msg.textContent = '需要登录才能修改设置，正在跳转…';
+      msg.className = 'form-message form-message--error';
+      redirectToLogin('/admin');
+    }
+  }
+}
+
+async function submitSettingsForm(e) {
+  e.preventDefault();
+  const form = e.target;
+  const msg = document.getElementById('settings-message');
+  const minutes = parseInt(form.refreshIntervalMinutes.value, 10);
+
+  try {
+    const resp = await authFetch(`${API_BASE}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshIntervalMinutes: minutes }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.error || '保存失败');
+    }
+
+    dashboardConfig.refreshIntervalMinutes = data.refreshIntervalMinutes;
+    if (msg) {
+      msg.textContent = `已保存：每 ${formatIntervalLabel(data.refreshIntervalMinutes)} 自动刷新。`;
+      msg.className = 'form-message form-message--success';
+    }
+    setupDashboardAutoRefresh();
+  } catch (err) {
+    if (msg) {
+      if (err.status === 401) {
+        msg.textContent = '需要登录，正在跳转…';
+        msg.className = 'form-message form-message--error';
+        redirectToLogin('/admin');
+        return;
+      }
+      msg.textContent = err.message || '保存失败';
+      msg.className = 'form-message form-message--error';
+    }
+  }
+}
+
 async function loadAdmin() {
   const list = document.getElementById('accounts-list');
   if (!list) return;
@@ -755,7 +953,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) refreshBtn.addEventListener('click', refreshQuotas);
 
-  if (document.getElementById('accounts-grid')) loadDashboard();
+  if (document.getElementById('accounts-grid')) {
+    await loadDashboardConfig();
+    await loadDashboard();
+    setupDashboardAutoRefresh();
+  }
 
   const form = document.getElementById('account-form');
   if (form) {
@@ -763,6 +965,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     await requirePageAuth();
     form.addEventListener('submit', submitAccountForm);
     loadAdmin();
+    loadDashboardSettings();
+
+    const settingsForm = document.getElementById('settings-form');
+    if (settingsForm) settingsForm.addEventListener('submit', submitSettingsForm);
 
     const verifyBtn = document.getElementById('verify-btn');
     if (verifyBtn) verifyBtn.addEventListener('click', verifyAccountForm);

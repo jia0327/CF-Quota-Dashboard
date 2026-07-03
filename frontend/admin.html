@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Manage Accounts — CF Quota Dashboard</title>
+  <title>账号管理 — CF 配额仪表盘</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <script src="/theme.js"></script>
@@ -14,8 +14,8 @@
   <header class="glass-nav">
     <div class="glass-nav__inner glass-nav__inner--narrow">
       <div class="glass-nav__brand">
-        <h1>Account Management</h1>
-        <p>Configure monitored Cloudflare accounts</p>
+        <h1>账号管理</h1>
+        <p>配置监控账号与刷新策略</p>
       </div>
       <nav class="glass-nav__links">
         <a href="/" class="nav-link">Dashboard</a>
@@ -27,6 +27,31 @@
   </header>
 
   <main class="page-main page-main--narrow space-y-8">
+    <section class="glass-card">
+      <h2 class="glass-card__title">刷新设置</h2>
+      <p class="form-hint">
+        Worker Cron 每 6 小时触发一次检查；距上次拉取不足此间隔的账号会使用缓存。
+        仪表盘打开时也会按此间隔自动更新数据（已登录时会触发后台拉取）。
+      </p>
+      <form id="settings-form" class="mt-4">
+        <div class="form-group">
+          <label class="form-label">自动刷新间隔</label>
+          <select name="refreshIntervalMinutes" class="glass-input" required>
+            <option value="15">15 分钟</option>
+            <option value="20">20 分钟（默认）</option>
+            <option value="30">30 分钟</option>
+            <option value="60">1 小时</option>
+            <option value="120">2 小时</option>
+            <option value="360">6 小时</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">保存设置</button>
+        </div>
+        <p id="settings-message" class="form-message"></p>
+      </form>
+    </section>
+
     <section class="glass-card">
       <h2 id="form-title" class="glass-card__title">Add Account</h2>
       <form id="account-form" class="mt-4">

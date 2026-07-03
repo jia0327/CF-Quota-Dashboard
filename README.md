@@ -179,7 +179,11 @@ npx wrangler deploy
 2. 若已设置 `PASSWORD` → 访问 **账号管理**（`/admin`）会跳转 `/login` 登录
 3. **添加被监控账号**：Account Name、Account ID、只读 API Token → **Verify Credentials** → **Save**
 4. **配置通知渠道**（`/channels`）：添加渠道 → **测试** → 启用
-5. 等待 Cron（每 6 小时）或点击 **Refresh Now** 手动拉取数据
+5. 等待 Cron（每 6 小时）或打开仪表盘后按 **刷新设置** 中的间隔自动更新；也可点击 ↻ 手动拉取
+
+### 刷新间隔（管理后台）
+
+在 **账号管理**（`/admin`）顶部的 **刷新设置** 中可配置自动刷新间隔（默认 **20 分钟**），保存至 KV `DASHBOARD_CONFIG`。Cron 仍每 6 小时触发，但实际拉取 Cloudflare API 时会跳过距上次检查不足该间隔的账号；仪表盘打开时也会按此间隔自动更新（已登录时触发后台拉取）。
 
 ### 7. 可选：KV 预置测试账号
 
@@ -202,7 +206,7 @@ curl.exe -X POST "https://your-worker.workers.dev/cron/fetch" -H "Cookie: cfqd_s
 | `ALERT_THRESHOLD` | Var | `70` | 任一 **available** 指标 `pct ≥ 阈值` 时触发告警 |
 | `FREE_TIER_LIMITS` | Var | 内置默认 | JSON 覆盖 `worker/src/free-tier-limits.ts` 中的限额 |
 | `WEBHOOK_URL` | Var | *(空)* | 旧版单 webhook；**仅当 KV 无 `NOTIFICATION_CHANNELS` 时**作为隐式企微渠道 |
-| `ACCOUNT_CHECK_INTERVAL_MINUTES` | Var | `20` | 距上次检查不足此分钟数的账号使用缓存，不发起 API 请求 |
+| `ACCOUNT_CHECK_INTERVAL_MINUTES` | Var | `20` | 未在 KV 配置刷新间隔时的回退值；距上次检查不足此分钟数的账号使用缓存 |
 | `MAX_EXTERNAL_SUBREQUESTS_PER_RUN` | Var | `50`（上限 50） | 单次 cron/手动刷新最多对外 subrequest 数（Workers 单次调用上限 50） |
 | `PUBLIC_API_TOKEN` | Secret/Var | HMAC 派生 | `GET /api/public/snapshot?token=` 的鉴权 token |
 
@@ -218,6 +222,8 @@ curl.exe -X POST "https://your-worker.workers.dev/cron/fetch" -H "Cookie: cfqd_s
 | POST | `/api/login` | — | 登录，设置 `cfqd_session` Cookie（24h，KV） |
 | POST | `/api/logout` | — | 登出 |
 | GET | `/api/snapshot` | — | 最新配额快照 |
+| GET | `/api/config` | — | 仪表盘刷新间隔等配置 |
+| PUT | `/api/config` | 需登录† | 更新刷新间隔（KV） |
 | GET | `/api/public/snapshot?token=` | Token | 公开快照（外部集成） |
 | GET | `/api/public/token` | 需登录 | 查看/派生公开 API token |
 | GET | `/api/accounts` | — | 账号列表（Token 掩码） |
