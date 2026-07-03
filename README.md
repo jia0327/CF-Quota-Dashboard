@@ -119,12 +119,13 @@
 git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
 cd CF-Quota-Dashboard
 npm install
-# 确认 KV 命名空间（通常已有 CF-Quota-Dashboard）→ 替换 wrangler.toml 中的 YOUR_KV_NAMESPACE_ID
+# 创建 KV 命名空间 → 将 id 写入 wrangler.toml 的 YOUR_KV_NAMESPACE_ID
+npx wrangler kv namespace create CF-Quota-Dashboard
 npx wrangler secret put PASSWORD --config wrangler.toml
 npm run deploy
 ```
 
-生产环境需绑定 KV（Worker 变量名 **`KV`**，命名空间显示名通常为 **`CF-Quota-Dashboard`**）并设置 `PASSWORD` Secret。主配置文件为仓库根目录 **`wrangler.toml`**；在 `worker/` 目录内单独部署时仍可使用 **`worker/wrangler.toml`**。GitHub Actions 未设置 `KV_NAMESPACE_ID` 时会自动查找或创建标题为 **`CF-Quota-Dashboard`** 的命名空间；若使用其他名称，请在 Secrets 中填入其 ID。
+生产环境需先创建 KV 命名空间（`wrangler kv namespace create CF-Quota-Dashboard`），绑定到 Worker（变量名 **`KV`**），并设置 `PASSWORD` Secret。主配置文件为仓库根目录 **`wrangler.toml`**；在 `worker/` 目录内单独部署时仍可使用 **`worker/wrangler.toml`**。GitHub Actions 未设置 `KV_NAMESPACE_ID` 时会自动查找或创建标题为 **`CF-Quota-Dashboard`** 的命名空间；若使用其他名称，请在 Secrets 中填入其 ID。
 
 **其他方式：** [GitHub Actions 自动部署](docs/DEPLOY.md#方法三github-actions-自动部署) · [Dashboard Connect Git](docs/DEPLOY.md#2-连接-github推荐)
 
