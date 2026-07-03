@@ -169,36 +169,53 @@ async function fetchChannels() {
   return resp.json();
 }
 
+function getPrimaryConfigRow(channel) {
+  const fields = CONFIG_FIELDS[channel.type] || [];
+  const primary = fields.find((f) => channel.config?.[f.key]) || fields[0];
+  if (!primary) return { label: '配置', value: '—' };
+
+  const value = channel.config[primary.key] || '—';
+  return { label: primary.label, value };
+}
+
 function renderChannelCard(channel) {
   const info = getTypeInfo(channel.type);
   const badgeClass = TYPE_BADGE[channel.type] || 'chip--muted';
-  const configSummary = Object.entries(channel.config)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(' · ');
+  const { label: configLabel, value: configValue } = getPrimaryConfigRow(channel);
+  const toggleBtnClass = channel.enabled
+    ? 'account-card__btn account-card__btn--disable'
+    : 'account-card__btn account-card__btn--enable';
 
   return `
-    <div class="list-item">
-      <div class="list-item__body">
-        ${renderChannelIcon(channel.type)}
-        <div class="list-item__content">
-          <div class="list-item__header">
-            <p class="list-item__title">${channel.name}</p>
+    <div class="channel-card">
+      <div class="channel-card__panel">
+        <div class="channel-card__header">
+          <div class="channel-card__identity">
+            ${renderChannelIcon(channel.type, 'sm')}
+            <h3 class="channel-card__title">${channel.name}</h3>
+          </div>
+          <div class="channel-card__badges">
             <span class="chip ${badgeClass}">${info.label}</span>
             <span class="chip ${channel.enabled ? 'chip--success' : 'chip--muted'}">
               ${channel.enabled ? '已启用' : '已禁用'}
             </span>
           </div>
-          <p class="list-item__desc">${info.desc}</p>
-          <p class="list-item__meta list-item__meta--truncate">${configSummary}</p>
         </div>
-      </div>
-      <div class="list-item__actions">
-        <button data-action="toggle" data-id="${channel.id}" class="btn btn-ghost btn-sm">
-          ${channel.enabled ? '禁用' : '启用'}
-        </button>
-        <button data-action="test" data-id="${channel.id}" class="btn btn-ghost btn-sm">测试</button>
-        <button data-action="edit" data-id="${channel.id}" class="btn btn-ghost btn-sm">编辑</button>
-        <button data-action="delete" data-id="${channel.id}" class="btn btn-danger btn-sm">删除</button>
+        <div class="channel-card__body">
+          <p class="channel-card__desc">${info.desc}</p>
+          <div class="account-card__row">
+            <span class="account-card__label">${configLabel}:</span>
+            <span class="account-card__value account-card__value--mono account-card__value--truncate" title="${configValue}">${configValue}</span>
+          </div>
+        </div>
+        <div class="account-card__footer">
+          <button data-action="toggle" data-id="${channel.id}" class="${toggleBtnClass}">
+            ${channel.enabled ? '禁用' : '启用'}
+          </button>
+          <button data-action="test" data-id="${channel.id}" class="account-card__btn account-card__btn--edit">测试</button>
+          <button data-action="edit" data-id="${channel.id}" class="account-card__btn account-card__btn--edit">编辑</button>
+          <button data-action="delete" data-id="${channel.id}" class="account-card__btn account-card__btn--delete">删除</button>
+        </div>
       </div>
     </div>
   `;
@@ -215,7 +232,7 @@ async function loadChannels() {
 
   if (!channels.length) {
     list.innerHTML = `
-      <div class="empty-state glass-card">
+      <div class="empty-state glass-card channels-list__empty">
         <div class="empty-state__icon"><i class="fas fa-bell-slash"></i></div>
         <p>尚未配置通知渠道。</p>
         <p class="form-hint">从左侧选择渠道类型开始添加。</p>

@@ -58,15 +58,15 @@
         </section>
       </aside>
 
-      <section>
-        <div class="channels-toolbar">
-          <h2 class="section-title channels-toolbar__title">已配置渠道</h2>
+      <section class="channels-main">
+        <div class="channels-toolbar glass-card channels-toolbar--compact">
+          <h2 class="section-title section-title--sm channels-toolbar__title">已配置渠道</h2>
           <button type="button" id="test-all-alerts-btn" class="btn btn-secondary btn-sm">
             <i class="fas fa-paper-plane" aria-hidden="true"></i>
             发送测试告警
           </button>
         </div>
-        <p id="test-all-message" class="form-message"></p>
+        <p id="test-all-message" class="form-message channels-toolbar__message"></p>
         <div id="test-all-results" class="alert-test-results hidden"></div>
         <div id="channels-list" class="channels-list loading-state">Loading…</div>
       </section>
