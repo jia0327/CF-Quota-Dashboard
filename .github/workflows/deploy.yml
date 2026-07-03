@@ -1,3 +1,16 @@
+# Deploy CF-Quota-Dashboard Worker to Cloudflare.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN  - API token with Workers Scripts + KV Edit
+#   CLOUDFLARE_ACCOUNT_ID - Account ID hosting the Worker
+#
+# Optional repository secrets:
+#   KV_NAMESPACE_ID       - KV namespace id; if unset, CI finds or creates title "KV"
+#   PASSWORD              - Admin login code; synced to Worker via wrangler secret put
+#
+# wrangler.toml keeps placeholder YOUR_KV_NAMESPACE_ID; the Resolve KV step patches it at deploy time.
+# Worker secrets (PASSWORD) are NOT set from GitHub unless PASSWORD secret is configured below.
+
 name: Deploy CF Quota Dashboard
 
 on:
@@ -25,6 +38,7 @@ jobs:
         working-directory: worker
         run: npm run typecheck
 
+      # Replace YOUR_KV_NAMESPACE_ID in wrangler.toml before deploy.
       - name: Resolve KV namespace
         working-directory: worker
         env:
@@ -74,3 +88,18 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Optional: set PASSWORD repository secret to enable admin auth after CI deploy.
+      - name: Sync PASSWORD secret (optional)
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+        run: |
+          if [ -n "$PASSWORD" ]; then
+            echo "$PASSWORD" | npx wrangler secret put PASSWORD
+            echo "PASSWORD secret synced to Worker"
+          else
+            echo "PASSWORD repository secret not set; Worker remains in Dev mode until you run: wrangler secret put PASSWORD"
+          fi
