@@ -143,7 +143,25 @@ const R2_CLASS_B = new Set([
   'GetBucketLifecycleConfiguration', 'GetBucketSippyConfiguration',
 ]);
 
-const UNAVAILABLE_NOTE = 'API query failed for this metric group';
+function parseApiErrorMessage(error: string): string {
+  const jsonStart = error.indexOf('[');
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(error.slice(jsonStart)) as Array<{ message?: string }>;
+      if (parsed[0]?.message) return parsed[0].message;
+    } catch {
+      /* fall through */
+    }
+  }
+  const colon = error.indexOf(': ');
+  const body = colon >= 0 ? error.slice(colon + 2) : error;
+  return body.length > 160 ? `${body.slice(0, 157)}...` : body;
+}
+
+function metricNote(prefix: string, partialErrors: string[]): string | undefined {
+  const match = partialErrors.find((e) => e.startsWith(`${prefix}:`));
+  return match ? parseApiErrorMessage(match) : undefined;
+}
 
 async function fetchCoreMetrics(
   token: string,
@@ -434,36 +452,27 @@ async function fetchR2Metrics(
   return { ok: true, r2Storage, r2ClassA, r2ClassB };
 }
 
-async function fetchVectorizeMetrics(
+async function fetchVectorizeQueried(
   token: string,
   accountId: string,
-  month: { start: string; end: string },
-): Promise<
-  | { ok: true; vectorizeQueried: number; vectorizeStored: number }
-  | { ok: false; error: string }
-> {
-  const vectorizeQuery = `query Vectorize($accountTag: String!, $monthStart: Time!, $monthEnd: Time!) {
+  monthStart: string,
+  nowIso: string,
+): Promise<{ ok: true; value: number } | { ok: false; error: string }> {
+  const queriedQuery = `query VectorizeQueried($accountTag: String!, $monthStart: Time!, $now: Time!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
-        vectorizeV2QueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+        vectorizeV2QueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $now }) {
           sum { billableQueriedDimensions }
-        }
-        vectorizeV2StorageAdaptiveGroups(
-          limit: 10000,
-          filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd },
-          orderBy: [datetime_DESC]
-        ) {
-          max { storedDimensions }
         }
       }
     }
   }`;
 
-  const result = await safeQuery('vectorize', () =>
-    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, vectorizeQuery, {
+  const result = await safeQuery('vectorize-queried', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, queriedQuery, {
       accountTag: accountId,
-      monthStart: month.start,
-      monthEnd: month.end,
+      monthStart,
+      now: nowIso,
     }),
   );
 
@@ -472,8 +481,71 @@ async function fetchVectorizeMetrics(
   const acc = getAccount(result.data);
   return {
     ok: true,
-    vectorizeQueried: sumGroups(acc.vectorizeV2QueriesAdaptiveGroups, (g) => g.sum?.billableQueriedDimensions),
-    vectorizeStored: sumGroups(acc.vectorizeV2StorageAdaptiveGroups, (g) => g.max?.storedDimensions),
+    value: sumGroups(acc.vectorizeV2QueriesAdaptiveGroups, (g) => g.sum?.billableQueriedDimensions),
+  };
+}
+
+interface VectorizeIndex {
+  name?: string;
+  config?: { dimensions?: number };
+}
+
+interface VectorizeIndexInfo {
+  dimensions?: number;
+  vectorCount?: number;
+}
+
+async function fetchVectorizeStoredRest(
+  token: string,
+  accountId: string,
+): Promise<{ ok: true; value: number } | { ok: false; error: string }> {
+  try {
+    const list = await restRequestRaw<VectorizeIndex[]>(
+      token,
+      `/accounts/${accountId}/vectorize/v2/indexes`,
+    );
+    let total = 0;
+    for (const idx of list.result ?? []) {
+      if (!idx.name) continue;
+      const info = await restRequestRaw<VectorizeIndexInfo>(
+        token,
+        `/accounts/${accountId}/vectorize/v2/indexes/${encodeURIComponent(idx.name)}/info`,
+      );
+      const dims = info.result?.dimensions ?? idx.config?.dimensions ?? 0;
+      const count = info.result?.vectorCount ?? 0;
+      total += dims * count;
+    }
+    return { ok: true, value: total };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `vectorize-stored: ${message}` };
+  }
+}
+
+async function fetchVectorizeMetrics(
+  token: string,
+  accountId: string,
+  monthStart: string,
+  nowIso: string,
+): Promise<{
+  vectorizeQueried: number;
+  vectorizeStored: number;
+  queriedOk: boolean;
+  storedOk: boolean;
+  errors: string[];
+}> {
+  const queriedResult = await fetchVectorizeQueried(token, accountId, monthStart, nowIso);
+  const storedResult = await fetchVectorizeStoredRest(token, accountId);
+  const errors: string[] = [];
+  if (!queriedResult.ok) errors.push(queriedResult.error);
+  if (!storedResult.ok) errors.push(storedResult.error);
+
+  return {
+    vectorizeQueried: queriedResult.ok ? queriedResult.value : 0,
+    vectorizeStored: storedResult.ok ? storedResult.value : 0,
+    queriedOk: queriedResult.ok,
+    storedOk: storedResult.ok,
+    errors,
   };
 }
 
@@ -512,23 +584,27 @@ async function fetchPagesBuilds(
 
   let totalBuilds = 0;
   for (const project of projects) {
-    let page = 1;
-    while (page <= 200) {
-      const path =
-        page === 1
-          ? `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments`
-          : `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments?page=${page}`;
-      const body = await restRequestRaw<PagesDeployment[]>(token, path);
-      const list = body.result ?? [];
-      totalBuilds += list.filter((d) => {
-        const created = new Date(d.created_on).getTime();
-        return created >= startTime && created <= endTime;
-      }).length;
+    try {
+      let page = 1;
+      while (page <= 200) {
+        const path =
+          page === 1
+            ? `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments`
+            : `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments?page=${page}`;
+        const body = await restRequestRaw<PagesDeployment[]>(token, path);
+        const list = body.result ?? [];
+        totalBuilds += list.filter((d) => {
+          const created = new Date(d.created_on).getTime();
+          return created >= startTime && created <= endTime;
+        }).length;
 
-      const oldest = list.length ? new Date(list[list.length - 1].created_on).getTime() : null;
-      const totalDeploymentPages = body.result_info?.total_pages ?? 1;
-      if (!list.length || page >= totalDeploymentPages || (oldest && oldest < startTime)) break;
-      page += 1;
+        const oldest = list.length ? new Date(list[list.length - 1].created_on).getTime() : null;
+        const totalDeploymentPages = body.result_info?.total_pages ?? 1;
+        if (!list.length || page >= totalDeploymentPages || (oldest && oldest < startTime)) break;
+        page += 1;
+      }
+    } catch {
+      /* skip project on REST failure; other projects may still succeed */
     }
   }
   return totalBuilds;
@@ -547,17 +623,18 @@ async function fetchAllMetrics(
   const d1Result = await fetchD1Metrics(token, accountId, ranges.day, ranges.month);
   const kvResult = await fetchKvMetrics(token, accountId, ranges.dayDate, ranges.monthDate);
   const r2Result = await fetchR2Metrics(token, accountId, ranges.month);
-  const vectorizeResult = await fetchVectorizeMetrics(token, accountId, ranges.month);
+  const nowIso = new Date().toISOString();
+  const vectorizeResult = await fetchVectorizeMetrics(token, accountId, ranges.month.start, nowIso);
 
   const pagesResult = await safeQuery('pages', () =>
-    fetchPagesBuilds(token, accountId, ranges.month.start, ranges.month.end),
+    fetchPagesBuilds(token, accountId, ranges.month.start, nowIso),
   );
 
   if (!d1Result.ok) partialErrors.push(d1Result.error);
   if (!kvResult.ok) partialErrors.push(kvResult.error);
   else if (kvResult.errors.length) partialErrors.push(...kvResult.errors);
   if (!r2Result.ok) partialErrors.push(r2Result.error);
-  if (!vectorizeResult.ok) partialErrors.push(vectorizeResult.error);
+  if (vectorizeResult.errors.length) partialErrors.push(...vectorizeResult.errors);
   if (!pagesResult.ok) partialErrors.push(pagesResult.error);
 
   const kvOpsOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-ops'));
@@ -599,100 +676,101 @@ async function fetchAllMetrics(
       d1Result.ok ? d1Result.d1Reads : 0,
       limits.d1_reads,
       d1Result.ok,
-      d1Result.ok ? undefined : UNAVAILABLE_NOTE,
+      d1Result.ok ? undefined : metricNote('d1', partialErrors),
     ),
     d1_writes: buildMetric(
       'd1_writes',
       d1Result.ok ? d1Result.d1Writes : 0,
       limits.d1_writes,
       d1Result.ok,
-      d1Result.ok ? undefined : UNAVAILABLE_NOTE,
+      d1Result.ok ? undefined : metricNote('d1', partialErrors),
     ),
     d1_storage_gb: buildMetric(
       'd1_storage_gb',
       d1Result.ok ? d1Result.d1StorageBytes : 0,
       limits.d1_storage_gb,
       d1Result.ok,
-      d1Result.ok ? undefined : UNAVAILABLE_NOTE,
+      d1Result.ok ? undefined : metricNote('d1', partialErrors),
     ),
     kv_reads: buildMetric(
       'kv_reads',
       kvResult.ok ? kvResult.kvReads : 0,
       limits.kv_reads,
       kvOpsOk,
-      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk ? undefined : metricNote('kv-ops', partialErrors),
     ),
     kv_writes: buildMetric(
       'kv_writes',
       kvResult.ok ? kvResult.kvWrites : 0,
       limits.kv_writes,
       kvOpsOk,
-      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk ? undefined : metricNote('kv-ops', partialErrors),
     ),
     kv_deletes: buildMetric(
       'kv_deletes',
       kvResult.ok ? kvResult.kvDeletes : 0,
       limits.kv_deletes,
       kvOpsOk,
-      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk ? undefined : metricNote('kv-ops', partialErrors),
     ),
     kv_lists: buildMetric(
       'kv_lists',
       kvResult.ok ? kvResult.kvLists : 0,
       limits.kv_lists,
       kvOpsOk,
-      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk ? undefined : metricNote('kv-ops', partialErrors),
     ),
     kv_storage_gb: buildMetric(
       'kv_storage_gb',
       kvResult.ok ? kvResult.kvStorageBytes : 0,
       limits.kv_storage_gb,
       kvStorageOk,
-      kvStorageOk ? undefined : UNAVAILABLE_NOTE,
+      kvStorageOk ? undefined : metricNote('kv-storage', partialErrors),
     ),
     r2_storage_gb: buildMetric(
       'r2_storage_gb',
       r2Result.ok ? r2Result.r2Storage : 0,
       limits.r2_storage_gb,
       r2Result.ok,
-      r2Result.ok ? undefined : UNAVAILABLE_NOTE,
+      r2Result.ok ? undefined : metricNote('r2', partialErrors),
     ),
     r2_class_a: buildMetric(
       'r2_class_a',
       r2Result.ok ? r2Result.r2ClassA : 0,
       limits.r2_class_a,
       r2Result.ok,
-      r2Result.ok ? undefined : UNAVAILABLE_NOTE,
+      r2Result.ok ? undefined : metricNote('r2', partialErrors),
     ),
     r2_class_b: buildMetric(
       'r2_class_b',
       r2Result.ok ? r2Result.r2ClassB : 0,
       limits.r2_class_b,
       r2Result.ok,
-      r2Result.ok ? undefined : UNAVAILABLE_NOTE,
+      r2Result.ok ? undefined : metricNote('r2', partialErrors),
     ),
     pages_builds: buildMetric(
       'pages_builds',
       pagesResult.ok ? pagesResult.data : 0,
       limits.pages_builds,
       pagesResult.ok,
-      pagesResult.ok ? undefined : UNAVAILABLE_NOTE,
+      pagesResult.ok ? undefined : metricNote('pages', partialErrors),
     ),
     pages_requests: buildMetric('pages_requests', pagesRequests, limits.pages_requests),
     ai_neurons: buildMetric('ai_neurons', aiNeurons, limits.ai_neurons),
     queues_ops: buildMetric('queues_ops', queuesOps, limits.queues_ops),
     vectorize_queried_dims: buildMetric(
       'vectorize_queried_dims',
-      vectorizeResult.ok ? vectorizeResult.vectorizeQueried : 0,
+      vectorizeResult.vectorizeQueried,
       limits.vectorize_queried_dims,
-      vectorizeResult.ok,
-      vectorizeResult.ok ? undefined : UNAVAILABLE_NOTE,
+      vectorizeResult.queriedOk,
+      vectorizeResult.queriedOk ? undefined : metricNote('vectorize-queried', partialErrors),
     ),
     vectorize_stored_dims: buildMetric(
       'vectorize_stored_dims',
-      vectorizeResult.ok ? vectorizeResult.vectorizeStored : 0,
+      vectorizeResult.vectorizeStored,
       limits.vectorize_stored_dims,
-      vectorizeResult.ok,
+      vectorizeResult.storedOk,
+      vectorizeResult.storedOk ? undefined : metricNote('vectorize-stored', partialErrors),
     ),
     hyperdrive_queries: buildMetric('hyperdrive_queries', hyperdriveQueries, limits.hyperdrive_queries),
     workflows_invocations: buildMetric('workflows_invocations', workflowsInvocations, limits.workflows_invocations),

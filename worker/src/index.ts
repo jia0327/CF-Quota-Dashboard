@@ -304,17 +304,18 @@ app.post('/api/channels/:id/test', requireAuth, async (c) => {
 });
 
 app.post('/cron/fetch', requireAuth, async (c) => {
-  const result = await runQuotaFetch(c.env);
+  const result = await runQuotaFetch(c.env, { force: true });
   return c.json(result);
 });
 
-export async function runQuotaFetch(env: Env): Promise<QuotaFetchResult> {
+export async function runQuotaFetch(env: Env, options?: { force?: boolean }): Promise<QuotaFetchResult> {
   const accounts = (await getAccounts(env.KV)).filter((a) => a.enabled);
   const previousSnapshot = await getSnapshot(env.KV);
   const limitsJson = env.FREE_TIER_LIMITS;
 
   const intervalMs = getCheckIntervalMinutes(env) * 60 * 1000;
   const maxSubrequests = getMaxSubrequests(env);
+  const force = options?.force === true;
   const now = Date.now();
 
   const existingByAccountId = new Map<string, AccountSnapshot>(
@@ -343,7 +344,7 @@ export async function runQuotaFetch(env: Env): Promise<QuotaFetchResult> {
     const cached = existingByAccountId.get(account.accountId);
     const lastCheckTime = cached?.lastCheckTime;
 
-    if (lastCheckTime) {
+    if (!force && lastCheckTime) {
       const elapsed = now - new Date(lastCheckTime).getTime();
       if (elapsed < intervalMs) {
         refreshedByAccountId.set(account.accountId, cached!);
