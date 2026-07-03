@@ -2,14 +2,14 @@
 
 <div align="center">
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jia0327/CF-Quota-Dashboard)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cf-fork-div/CF-Quota-Dashboard)
 
 **基于 Cloudflare Workers + KV + Hono 的多账号免费额度监控面板**
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange.svg)](https://workers.cloudflare.com/)
 [![Hono](https://img.shields.io/badge/Hono-Framework-e36002.svg)](https://hono.dev/)
-[![GitHub](https://img.shields.io/badge/GitHub-jia0327%2FCF--Quota--Dashboard-181717?logo=github)](https://github.com/jia0327/CF-Quota-Dashboard)
+[![GitHub](https://img.shields.io/badge/GitHub-cf--fork--div%2FCF--Quota--Dashboard-181717?logo=github)](https://github.com/cf-fork-div/CF-Quota-Dashboard)
 
 </div>
 
@@ -116,7 +116,7 @@
 ## 🛠️ 部署指南
 
 ```bash
-git clone https://github.com/jia0327/CF-Quota-Dashboard.git
+git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
 cd CF-Quota-Dashboard/worker
 npm install
 # 创建 KV → 替换 worker/wrangler.toml 中的 YOUR_KV_NAMESPACE_ID
@@ -150,58 +150,6 @@ npm run deploy
 
 ---
 
-## 📡 API 文档
-
-### 公开快照
-
-```http
-GET /api/public/snapshot?token=<token>
-```
-
-登录后可通过 `GET /api/public/token` 获取 token（默认从 `PASSWORD` + `USERNAME` HMAC 派生，或通过 `PUBLIC_API_TOKEN` 指定）。
-
-**响应示例**（`SnapshotResponse`）：
-
-```json
-{
-  "lastUpdated": "2026-07-03T12:00:00.000Z",
-  "stale": false,
-  "accounts": [
-    {
-      "accountId": "6d7...90",
-      "accountName": "主账号",
-      "status": "ok",
-      "quotas": {
-        "workers_requests": {
-          "used": 80000,
-          "limit": 100000,
-          "pct": 80,
-          "unit": "requests",
-          "period": "daily",
-          "label": "Workers Requests",
-          "available": true
-        }
-      },
-      "lastCheckTime": "2026-07-03T12:00:00.000Z"
-    }
-  ]
-}
-```
-
-### 主要路由
-
-| 路径 | 方法 | 说明 | 认证 |
-|------|------|------|------|
-| `/api/snapshot` | GET | 配额快照（过期自动刷新） | 无 |
-| `/api/public/snapshot` | GET | 公开快照 | Token |
-| `/api/accounts` | GET/POST | 账号列表 / 添加 | Cookie |
-| `/api/channels` | GET/POST | 渠道列表 / 添加 | Cookie |
-| `/api/config` | GET/PUT | 刷新间隔 | PUT 需 Cookie |
-| `/api/login` | POST | 登录（单字段 `password`） | 无 |
-| `/cron/fetch` | POST | 强制手动刷新 | Cookie |
-
----
-
 ## 🏗️ 技术架构
 
 ```
@@ -224,31 +172,6 @@ GET /api/public/snapshot?token=<token>
 | 前端 | 原生 HTML + CSS + JS（Workers Assets） |
 | 数据采集 | Cloudflare GraphQL Analytics + REST API |
 | CI/CD | GitHub Actions + Wrangler |
-
----
-
-## 🗺️ 开发计划
-
-| 状态 | 项目 |
-|------|------|
-| ✅ 已完成 | 35 项指标监控、多账号 KV、多通道告警、Vectorize、访问触发刷新 |
-| ✅ 已完成 | KV 敏感字段静态加密（`ENCRYPTION_KEY` / `PASSWORD` 派生） |
-| ✅ 已完成 | 管理页移除 Tailwind CDN，统一原生 CSS |
-| ✅ 已完成 | 按账号告警规则、UTC 日/月去重、公开 API |
-| 🔲 计划中 | 历史用量趋势图表 |
-| 🔲 计划中 | 更多通知渠道与告警模板 |
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 与 Pull Request！
-
-1. Fork 本仓库
-2. 创建特性分支（`git checkout -b feature/amazing-feature`）
-3. 提交更改（`git commit -m 'Add amazing feature'`）
-4. 推送到分支（`git push origin feature/amazing-feature`）
-5. 开启 Pull Request
 
 ---
 

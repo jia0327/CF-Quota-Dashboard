@@ -28,7 +28,7 @@
 ### 1. 克隆仓库并安装依赖
 
 ```bash
-git clone https://github.com/jia0327/CF-Quota-Dashboard.git
+git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
 cd CF-Quota-Dashboard/worker
 npm install
 ```
@@ -140,7 +140,7 @@ npm run dev
 
 ### 2. 连接 GitHub（可选）
 
-在 Worker 设置中连接 [jia0327/CF-Quota-Dashboard](https://github.com/jia0327/CF-Quota-Dashboard) 仓库，或手动上传 `worker/` 与 `frontend/` 目录代码。
+在 Worker 设置中连接 [cf-fork-div/CF-Quota-Dashboard](https://github.com/cf-fork-div/CF-Quota-Dashboard) 仓库，或手动上传 `worker/` 与 `frontend/` 目录代码。
 
 ### 3. 创建 KV 命名空间（⚠️ 必须）
 
@@ -198,7 +198,7 @@ npm run dev
 
 ### 1. Fork / 克隆仓库
 
-Fork [jia0327/CF-Quota-Dashboard](https://github.com/jia0327/CF-Quota-Dashboard) 到你的 GitHub 账号，或使用已有仓库。
+Fork [cf-fork-div/CF-Quota-Dashboard](https://github.com/cf-fork-div/CF-Quota-Dashboard) 到你的 GitHub 账号，或使用已有仓库。
 
 ### 2. 创建 Cloudflare API Token
 
@@ -339,7 +339,7 @@ npx wrangler secret put ENCRYPTION_KEY
 # 粘贴 openssl rand -hex 32 的输出
 ```
 
-**`QUOTA_SNAPSHOT`**（配额快照，字段见 [README — API 文档](../README.md#-api-文档)）：
+**`QUOTA_SNAPSHOT`**（配额快照，字段见下方示例）：
 
 ```json
 {
