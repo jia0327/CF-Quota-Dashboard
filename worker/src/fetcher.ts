@@ -226,7 +226,6 @@ async function fetchCoreMetrics(
           count
         }
         logExplorerIngestionAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
-          count
           sum { totalBytes }
         }
         workersBuildsBuildMinutesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
@@ -259,7 +258,7 @@ async function fetchCoreMetrics(
   );
 
   if (!result.ok) {
-    throw new Error(result.error);
+    return { acc: {}, errors: [result.error] };
   }
 
   return { acc: getAccount(result.data), errors: [] };
@@ -754,7 +753,9 @@ async function fetchAllMetrics(
   const ranges = getUtcRanges();
   const partialErrors: string[] = [];
 
-  const { acc } = await fetchCoreMetrics(token, accountId, ranges.day, ranges.month);
+  const coreResult = await fetchCoreMetrics(token, accountId, ranges.day, ranges.month);
+  const acc = coreResult.acc;
+  if (coreResult.errors.length) partialErrors.push(...coreResult.errors);
 
   const d1Result = await fetchD1Metrics(token, accountId, ranges.day, ranges.month);
   const kvResult = await fetchKvMetrics(token, accountId, ranges.dayDate, ranges.monthDate);
@@ -793,7 +794,8 @@ async function fetchAllMetrics(
     (g) => g.sum?.totalSessionDurationMs,
   );
   const analyticsWrites = sumGroups(acc.workersAnalyticsEngineAdaptiveGroups, (g) => g.count);
-  const logsEvents = sumGroups(acc.logExplorerIngestionAdaptiveGroups, (g) => g.count);
+  const logsEvents = 0;
+  const logsEventsOk = false;
   const logsBytes = sumGroups(acc.logExplorerIngestionAdaptiveGroups, (g) => g.sum?.totalBytes);
   const workersBuildMinutes = sumGroups(
     acc.workersBuildsBuildMinutesAdaptiveGroups,
@@ -954,10 +956,8 @@ async function fetchAllMetrics(
       'workers_logs_events',
       logsEvents,
       limits.workers_logs_events,
-      logsEvents > 0 || acc.logExplorerIngestionAdaptiveGroups !== undefined,
-      logsEvents > 0
-        ? undefined
-        : 'GraphQL exposes count when Log Explorer ingestion is enabled; Free limit 200k events/day',
+      logsEventsOk,
+      'Log Explorer event count not exposed via GraphQL; Free limit 200k events/day',
     ),
     workers_logs_bytes: buildMetric(
       'workers_logs_bytes',
