@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type {
+  AccountAlertRule,
   AccountConfig,
   AccountSnapshot,
   ChannelType,
@@ -9,8 +10,10 @@ import type {
   QuotaFetchResult,
   RefreshStats,
 } from './types';
+import { ALERT_SERVICE_GROUPS, normalizeAlertRules } from './account-alerts';
 import {
   addChannel,
+  checkAlertTestRateLimit,
   deleteChannel,
   generateId,
   getAccounts,
@@ -18,11 +21,14 @@ import {
   getChannels,
   getDashboardConfig,
   getSnapshot,
+  markAlertTestSent,
   maskAccount,
   maskChannel,
+  reorderAccounts,
   saveAccounts,
   saveDashboardConfig,
   saveSnapshot,
+  sortSnapshotsByAccountOrder,
   toggleChannel,
   updateAccount,
   updateChannel,
@@ -31,7 +37,7 @@ import {
 } from './kv-store';
 import { fetchAccountQuotas, SUBREQUESTS_PER_ACCOUNT, verifyAccountCredentials } from './fetcher';
 import { getAlertThreshold } from './free-tier-limits';
-import { sendQuotaAlert, sendTestNotification } from './notifier';
+import { sendQuotaAlert, sendTestAlerts, sendTestNotification } from './notifier';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
@@ -57,6 +63,33 @@ async function getCheckIntervalMinutes(env: Env): Promise<number> {
 
   const parsed = parseInt(env.ACCOUNT_CHECK_INTERVAL_MINUTES ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFRESH_INTERVAL_MINUTES;
+}
+
+function isSnapshotStale(lastUpdated: string | null | undefined, intervalMinutes: number): boolean {
+  if (!lastUpdated) return true;
+  const elapsed = Date.now() - new Date(lastUpdated).getTime();
+  return elapsed >= intervalMinutes * 60 * 1000;
+}
+
+async function getSnapshotWithOptionalRefresh(
+  env: Env,
+  options?: { force?: boolean },
+): Promise<QuotaFetchResult | { lastUpdated: string | null; accounts: AccountSnapshot[] }> {
+  const snapshot = await getSnapshot(env.KV);
+  const intervalMinutes = await getCheckIntervalMinutes(env);
+
+  if (options?.force || isSnapshotStale(snapshot?.lastUpdated, intervalMinutes)) {
+    return runQuotaFetch(env, { force: true });
+  }
+
+  return snapshot ?? { lastUpdated: null, accounts: [] };
+}
+
+function scheduleQuotaRefresh(
+  env: Env,
+  ctx: { waitUntil: (promise: Promise<unknown>) => void },
+): void {
+  ctx.waitUntil(runQuotaFetch(env, { force: true }));
 }
 
 function getMaxSubrequests(env: Env): number {
@@ -123,8 +156,12 @@ app.get('/api/public/snapshot', async (c) => {
     return c.json({ error: 'Forbidden' }, 403);
   }
 
-  const snapshot = await getSnapshot(c.env.KV);
-  return c.json(snapshot ?? { lastUpdated: null, accounts: [] });
+  const snapshot = await getSnapshotWithOptionalRefresh(c.env);
+  const accounts = await getAccounts(c.env.KV);
+  if (snapshot.accounts?.length && accounts.length) {
+    snapshot.accounts = sortSnapshotsByAccountOrder(snapshot.accounts, accounts);
+  }
+  return c.json(snapshot);
 });
 
 app.get('/api/public/token', requireAuth, async (c) => {
@@ -136,8 +173,16 @@ app.get('/api/public/token', requireAuth, async (c) => {
 });
 
 app.get('/api/accounts', async (c) => {
+  const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
   const accounts = await getAccounts(c.env.KV);
-  return c.json(accounts.map(maskAccount));
+  return c.json(accounts.map((a) => maskAccount(a, threshold)));
+});
+
+app.get('/api/alert-service-groups', async (c) => {
+  return c.json({
+    groups: ALERT_SERVICE_GROUPS.map(({ id, title, keys }) => ({ id, title, keys })),
+    defaultThresholdPercent: 80,
+  });
 });
 
 app.post('/api/accounts', requireAuth, async (c) => {
@@ -146,12 +191,15 @@ app.post('/api/accounts', requireAuth, async (c) => {
     accountId?: string;
     apiToken?: string;
     enabled?: boolean;
+    alertRules?: AccountAlertRule[];
   }>();
 
   if (!body.name?.trim() || !body.accountId?.trim() || !body.apiToken?.trim()) {
     return c.json({ error: 'name, accountId, and apiToken are required' }, 400);
   }
 
+  const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
+  const alertRules = normalizeAlertRules(body.alertRules, undefined, threshold);
   const accounts = await getAccounts(c.env.KV);
   const account: AccountConfig = {
     id: generateId(),
@@ -159,10 +207,12 @@ app.post('/api/accounts', requireAuth, async (c) => {
     accountId: body.accountId.trim(),
     apiToken: body.apiToken.trim(),
     enabled: body.enabled !== false,
+    alertRules: alertRules.length ? alertRules : undefined,
   };
   accounts.push(account);
   await saveAccounts(c.env.KV, accounts);
-  return c.json(maskAccount(account), 201);
+  scheduleQuotaRefresh(c.env, c.executionCtx);
+  return c.json(maskAccount(account, threshold), 201);
 });
 
 app.post('/api/accounts/verify', requireAuth, async (c) => {
@@ -178,6 +228,27 @@ app.post('/api/accounts/verify', requireAuth, async (c) => {
   return c.json({ ok: true, accountName: result.accountName });
 });
 
+app.put('/api/accounts/reorder', requireAuth, async (c) => {
+  const body = await c.req.json<{ accountIds?: string[] }>();
+  if (!body.accountIds || !Array.isArray(body.accountIds) || body.accountIds.length === 0) {
+    return c.json({ error: 'accountIds array is required' }, 400);
+  }
+
+  const reordered = await reorderAccounts(c.env.KV, body.accountIds);
+  if (!reordered) {
+    return c.json({ error: 'accountIds must include every configured account exactly once' }, 400);
+  }
+
+  const snapshot = await getSnapshot(c.env.KV);
+  if (snapshot?.accounts?.length) {
+    snapshot.accounts = sortSnapshotsByAccountOrder(snapshot.accounts, reordered);
+    await saveSnapshot(c.env.KV, snapshot);
+  }
+
+  const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
+  return c.json(reordered.map((a) => maskAccount(a, threshold)));
+});
+
 app.put('/api/accounts/:id', requireAuth, async (c) => {
   const id = c.req.param('id');
   if (!id) return c.json({ error: 'Account id required' }, 400);
@@ -186,17 +257,32 @@ app.put('/api/accounts/:id', requireAuth, async (c) => {
     accountId?: string;
     apiToken?: string;
     enabled?: boolean;
+    alertRules?: AccountAlertRule[];
   }>();
 
-  const updated = await updateAccount(c.env.KV, id, {
-    name: body.name,
-    accountId: body.accountId,
-    apiToken: body.apiToken,
-    enabled: body.enabled,
-  });
+  const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
+  const updated = await updateAccount(
+    c.env.KV,
+    id,
+    {
+      name: body.name,
+      accountId: body.accountId,
+      apiToken: body.apiToken,
+      enabled: body.enabled,
+      alertRules: body.alertRules,
+    },
+    threshold,
+  );
 
   if (!updated) return c.json({ error: 'Account not found' }, 404);
-  return c.json(maskAccount(updated));
+
+  const quotaAffecting =
+    body.enabled !== undefined || body.accountId !== undefined || body.apiToken !== undefined;
+  if (quotaAffecting) {
+    scheduleQuotaRefresh(c.env, c.executionCtx);
+  }
+
+  return c.json(maskAccount(updated, threshold));
 });
 
 app.delete('/api/accounts/:id', requireAuth, async (c) => {
@@ -207,12 +293,17 @@ app.delete('/api/accounts/:id', requireAuth, async (c) => {
     return c.json({ error: 'Account not found' }, 404);
   }
   await saveAccounts(c.env.KV, next);
+  scheduleQuotaRefresh(c.env, c.executionCtx);
   return c.json({ ok: true });
 });
 
 app.get('/api/snapshot', async (c) => {
-  const snapshot = await getSnapshot(c.env.KV);
-  return c.json(snapshot ?? { lastUpdated: null, accounts: [] });
+  const snapshot = await getSnapshotWithOptionalRefresh(c.env);
+  const accounts = await getAccounts(c.env.KV);
+  if (snapshot.accounts?.length && accounts.length) {
+    snapshot.accounts = sortSnapshotsByAccountOrder(snapshot.accounts, accounts);
+  }
+  return c.json(snapshot);
 });
 
 app.get('/api/config', async (c) => {
@@ -334,15 +425,88 @@ app.patch('/api/channels/:id/toggle', requireAuth, async (c) => {
   return c.json(maskChannel(channel));
 });
 
+function getAlertTestRateLimitKey(c: { req: { header: (name: string) => string | undefined } }): string {
+  const token = parseSessionCookie(c.req.header('Cookie'));
+  if (token) return `session:${token}`;
+  const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'anonymous';
+  return `ip:${ip}`;
+}
+
+app.post('/api/alerts/test', requireAuth, async (c) => {
+  const rateLimitKey = getAlertTestRateLimitKey(c);
+  const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
+  if (!rateLimit.allowed) {
+    return c.json(
+      {
+        error: '测试告警发送过于频繁，请稍后再试',
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      429,
+    );
+  }
+
+  let body: { accountId?: string } = {};
+  try {
+    body = await c.req.json<{ accountId?: string }>();
+  } catch {
+    // empty body is fine
+  }
+
+  let accountName: string | undefined;
+  if (body.accountId?.trim()) {
+    const accounts = await getAccounts(c.env.KV);
+    const account = accounts.find(
+      (a) => a.id === body.accountId || a.accountId === body.accountId,
+    );
+    if (account) accountName = account.name;
+  }
+
+  const channels = await getChannels(c.env.KV);
+  const enabledCount = channels.filter((ch) => ch.enabled).length;
+  const legacyUrl = c.env.WEBHOOK_URL?.trim();
+  if (enabledCount === 0 && !legacyUrl) {
+    return c.json({ error: '未配置已启用的通知渠道，请先在「通知渠道」页面添加并启用' }, 400);
+  }
+
+  const result = await sendTestAlerts(c.env, accountName ? { accountName } : undefined);
+  await markAlertTestSent(c.env.KV, rateLimitKey);
+
+  const successCount = result.channels.filter((ch) => ch.ok).length;
+  const failCount = result.channels.length - successCount;
+
+  return c.json({
+    ok: result.sent,
+    sent: result.sent,
+    accountName: accountName ?? null,
+    channels: result.channels,
+    message: result.sent
+      ? `测试告警已发送（${successCount}/${result.channels.length} 个渠道成功${failCount ? `，${failCount} 个失败` : ''}）`
+      : '所有通知渠道发送失败，请检查渠道配置',
+  });
+});
+
 app.post('/api/channels/:id/test', requireAuth, async (c) => {
   const id = c.req.param('id');
   if (!id) return c.json({ error: 'Channel id required' }, 400);
   const channel = await getChannelById(c.env.KV, id);
   if (!channel) return c.json({ error: 'Channel not found' }, 404);
 
+  const rateLimitKey = `${getAlertTestRateLimitKey(c)}:channel:${id}`;
+  const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
+  if (!rateLimit.allowed) {
+    return c.json(
+      {
+        error: '测试发送过于频繁，请稍后再试',
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      429,
+    );
+  }
+
   const result = await sendTestNotification(channel);
+  await markAlertTestSent(c.env.KV, rateLimitKey);
   if (!result.ok) return c.json({ ok: false, error: result.error }, 502);
-  return c.json({ ok: true });
+  return c.json({ ok: true, message: '测试消息已发送' });
 });
 
 app.post('/cron/fetch', requireAuth, async (c) => {
@@ -447,8 +611,8 @@ export async function runQuotaFetch(env: Env, options?: { force?: boolean }): Pr
 
   await saveSnapshot(env.KV, snapshot);
 
-  const threshold = getAlertThreshold(env.ALERT_THRESHOLD);
-  const alerted = await sendQuotaAlert(env, accountSnapshots, threshold);
+  const allAccounts = await getAccounts(env.KV);
+  const alerted = await sendQuotaAlert(env, accountSnapshots, allAccounts);
 
   return { ...snapshot, alerted };
 }

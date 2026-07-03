@@ -13,7 +13,7 @@ const GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 const REST_BASE = 'https://api.cloudflare.com/client/v4';
 
 /** Estimated external subrequests per account (GraphQL batches + REST). */
-export const SUBREQUESTS_PER_ACCOUNT = 9;
+export const SUBREQUESTS_PER_ACCOUNT = 10;
 
 function formatUtcDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -80,7 +80,14 @@ interface CfApiError {
 interface CfApiResponse<T> {
   success?: boolean;
   result?: T;
-  result_info?: { total_pages?: number; page?: number; total_count?: number; count?: number };
+  result_info?: {
+    total_pages?: number;
+    page?: number;
+    total_count?: number;
+    count?: number;
+    cursor?: string;
+    per_page?: number;
+  };
   errors?: CfApiError[];
 }
 
@@ -125,14 +132,47 @@ function isNotEntitledError(errors: CfApiError[]): boolean {
   });
 }
 
-async function fetchR2ActivationStatus(
+interface R2BucketListResult {
+  buckets?: Array<{ name?: string }>;
+}
+
+async function fetchR2BucketCount(
   token: string,
   accountId: string,
-): Promise<ServiceActivationStatus> {
-  const result = await restRequestSafe<unknown[]>(token, `/accounts/${accountId}/r2/buckets`);
-  if (result.ok) return 'activated';
-  if (isNotEntitledError(result.errors)) return 'not_activated';
-  return 'unknown';
+): Promise<
+  | { ok: true; count: number; activation: ServiceActivationStatus }
+  | { ok: false; error: string; activation: ServiceActivationStatus }
+> {
+  let count = 0;
+  let cursor: string | undefined;
+  let page = 0;
+
+  while (page < 100) {
+    const qs = new URLSearchParams({ per_page: '100' });
+    if (cursor) qs.set('cursor', cursor);
+    const result = await restRequestSafe<R2BucketListResult>(
+      token,
+      `/accounts/${accountId}/r2/buckets?${qs}`,
+    );
+
+    if (!result.ok) {
+      const activation: ServiceActivationStatus = isNotEntitledError(result.errors)
+        ? 'not_activated'
+        : 'unknown';
+      const errorBody = result.errors.length
+        ? JSON.stringify(result.errors)
+        : `REST ${result.status}`;
+      return { ok: false, error: `r2-buckets: ${errorBody}`, activation };
+    }
+
+    const batch = result.data.result?.buckets ?? [];
+    count += batch.length;
+    cursor = result.data.result_info?.cursor;
+    if (!cursor || batch.length === 0) break;
+    page += 1;
+  }
+
+  return { ok: true, count, activation: 'activated' };
 }
 
 interface ViewerAccount {
@@ -260,6 +300,15 @@ function kvNamespaceMetricNote(error: string | undefined): string | undefined {
   const message = parseApiErrorMessage(error);
   if (isAuthErrorMessage(message)) {
     return '需要 API Token 权限：Account → Workers KV Storage → Read';
+  }
+  return message;
+}
+
+function r2BucketMetricNote(error: string | undefined): string | undefined {
+  if (!error) return undefined;
+  const message = parseApiErrorMessage(error);
+  if (isAuthErrorMessage(message)) {
+    return '需要 API Token 权限：Account → Workers R2 Storage → Read';
   }
   return message;
 }
@@ -1004,7 +1053,7 @@ async function fetchAllMetrics(
   const d1DatabasesResult = await fetchD1DatabaseCount(token, accountId);
   const kvNamespacesResult = await fetchKvNamespaceCount(token, accountId);
   const kvResult = await fetchKvMetrics(token, accountId, ranges.dayDate, ranges.monthDate);
-  const r2Activation = await fetchR2ActivationStatus(token, accountId);
+  const r2BucketsResult = await fetchR2BucketCount(token, accountId);
   const r2Result = await fetchR2Metrics(token, accountId, ranges.month);
   const vectorizeResult = await fetchVectorizeMetrics(token, accountId, ranges.month.start, nowIso);
 
@@ -1149,6 +1198,15 @@ async function fetchAllMetrics(
       r2Result.ok,
       r2Result.ok ? undefined : metricNote('r2', partialErrors),
     ),
+    r2_buckets: buildMetric(
+      'r2_buckets',
+      r2BucketsResult.ok ? r2BucketsResult.count : 0,
+      limits.r2_buckets,
+      r2BucketsResult.ok,
+      r2BucketsResult.ok
+        ? undefined
+        : r2BucketMetricNote(r2BucketsResult.error),
+    ),
     pages_builds: buildMetric(
       'pages_builds',
       pagesResult.ok ? pagesResult.data : 0,
@@ -1200,7 +1258,7 @@ async function fetchAllMetrics(
   return {
     quotas,
     partialErrors,
-    serviceStatus: { r2: r2Activation },
+    serviceStatus: { r2: r2BucketsResult.activation },
   };
 }
 

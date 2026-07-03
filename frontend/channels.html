@@ -18,7 +18,7 @@
         <p>配置告警推送目标 · <span id="enabled-count" class="channels-enabled-count">0</span> 个已启用</p>
       </div>
       <nav class="glass-nav__links">
-        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/" class="nav-link">仪表盘</a>
         <a href="/admin" class="nav-link">账号管理</a>
         <a href="/channels" class="nav-link nav-link--active">通知渠道</a>
         <span id="nav-auth" class="nav-auth"></span>
@@ -58,7 +58,15 @@
       </aside>
 
       <section>
-        <h2 class="section-title">已配置渠道</h2>
+        <div class="channels-toolbar">
+          <h2 class="section-title channels-toolbar__title">已配置渠道</h2>
+          <button type="button" id="test-all-alerts-btn" class="btn btn-secondary btn-sm">
+            <i class="fas fa-paper-plane" aria-hidden="true"></i>
+            发送测试告警
+          </button>
+        </div>
+        <p id="test-all-message" class="form-message"></p>
+        <div id="test-all-results" class="alert-test-results hidden"></div>
         <div id="channels-list" class="channels-list loading-state">Loading…</div>
       </section>
     </div>

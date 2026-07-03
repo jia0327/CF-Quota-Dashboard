@@ -229,6 +229,80 @@ async function loadChannels() {
   });
 }
 
+function renderAlertTestResults(container, channels) {
+  if (!container) return;
+  if (!channels?.length) {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.remove('hidden');
+  container.innerHTML = channels.map((ch) => {
+    const info = getTypeInfo(ch.channelType);
+    const statusClass = ch.ok ? 'alert-test-result--ok' : 'alert-test-result--fail';
+    const statusLabel = ch.ok ? '成功' : '失败';
+    const errorLine = ch.error
+      ? `<span class="alert-test-result__error">${ch.error}</span>`
+      : '';
+    return `
+      <div class="alert-test-result ${statusClass}">
+        <span><strong>${ch.channelName}</strong> · ${info.label}</span>
+        <span class="chip ${ch.ok ? 'chip--success' : 'chip--danger'}">${statusLabel}</span>
+        ${errorLine}
+      </div>
+    `;
+  }).join('');
+}
+
+async function sendTestAlert(options = {}) {
+  const { accountId, messageEl, resultsEl, buttonEl } = options;
+  if (messageEl) {
+    messageEl.textContent = '';
+    messageEl.className = 'form-message';
+  }
+  if (resultsEl) {
+    resultsEl.classList.add('hidden');
+    resultsEl.innerHTML = '';
+  }
+
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.dataset.originalText = buttonEl.dataset.originalText || buttonEl.textContent;
+    buttonEl.textContent = '发送中…';
+  }
+
+  try {
+    const resp = await authFetch(`${API_BASE}/api/alerts/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(accountId ? { accountId } : {}),
+    });
+    const data = await resp.json();
+
+    if (resp.status === 429) {
+      throw new Error(data.error || `请 ${data.retryAfterSeconds ?? 60} 秒后再试`);
+    }
+    if (!resp.ok) throw new Error(data.error || '发送失败');
+
+    if (messageEl) {
+      messageEl.textContent = data.message || '测试告警已发送';
+      messageEl.className = `form-message ${data.ok ? 'form-message--success' : 'form-message--error'}`;
+    }
+    renderAlertTestResults(resultsEl, data.channels);
+  } catch (err) {
+    if (messageEl) {
+      messageEl.textContent = err.message || '发送失败';
+      messageEl.className = 'form-message form-message--error';
+    }
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = buttonEl.dataset.originalText || '发送测试告警';
+    }
+  }
+}
+
 async function handleAction(btn) {
   const action = btn.getAttribute('data-action');
   const id = btn.getAttribute('data-id');
@@ -260,8 +334,11 @@ async function handleAction(btn) {
     try {
       const resp = await authFetch(`${API_BASE}/api/channels/${id}/test`, { method: 'POST' });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Test failed');
-      alert('测试消息已发送');
+      if (resp.status === 429) {
+        throw new Error(data.error || `请 ${data.retryAfterSeconds ?? 60} 秒后再试`);
+      }
+      if (!resp.ok) throw new Error(data.error || '测试失败');
+      alert(data.message || '测试消息已发送');
     } catch (err) {
       alert(`测试失败: ${err.message}`);
     } finally {
@@ -327,6 +404,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('cancel-form')?.addEventListener('click', hideForm);
   document.getElementById('channel-form')?.addEventListener('submit', submitChannelForm);
+
+  document.getElementById('test-all-alerts-btn')?.addEventListener('click', () => {
+    sendTestAlert({
+      messageEl: document.getElementById('test-all-message'),
+      resultsEl: document.getElementById('test-all-results'),
+      buttonEl: document.getElementById('test-all-alerts-btn'),
+    });
+  });
 
   loadChannels();
 });

@@ -18,7 +18,7 @@
         <p>配置监控账号与刷新策略</p>
       </div>
       <nav class="glass-nav__links">
-        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/" class="nav-link">仪表盘</a>
         <a href="/admin" class="nav-link nav-link--active">账号管理</a>
         <a href="/channels" class="nav-link">通知渠道</a>
         <span id="nav-auth" class="nav-auth"></span>
@@ -30,12 +30,12 @@
     <section class="glass-card">
       <h2 class="glass-card__title">刷新设置</h2>
       <p class="form-hint">
-        Worker Cron 每 6 小时触发一次检查；距上次拉取不足此间隔的账号会使用缓存。
-        仪表盘打开时也会按此间隔自动更新数据（已登录时会触发后台拉取）。
+        快照缓存 TTL：访问仪表盘或调用 GET /api/snapshot 时，若超过此间隔则自动拉取 Cloudflare API。
+        无人访问时不刷新；添加/删除/启用/禁用账号后会立即触发一次刷新。
       </p>
       <form id="settings-form" class="mt-4">
         <div class="form-group">
-          <label class="form-label">自动刷新间隔</label>
+          <label class="form-label">缓存有效期</label>
           <select name="refreshIntervalMinutes" class="glass-input" required>
             <option value="15">15 分钟</option>
             <option value="20">20 分钟（默认）</option>
@@ -53,33 +53,66 @@
     </section>
 
     <section class="glass-card">
-      <h2 id="form-title" class="glass-card__title">Add Account</h2>
+      <h2 id="form-title" class="glass-card__title">添加账号</h2>
+      <div class="form-hint space-y-2 mb-4">
+        <p class="font-medium text-[var(--text-secondary)]">参数获取说明</p>
+        <p><strong>Account Name</strong>：自定义标签，任意命名，用于在仪表盘中区分多个账号。</p>
+        <p><strong>Account ID</strong>：登录 Cloudflare Dashboard → 进入任意站点「概览 / Overview」→ 右侧边栏查看 <strong>Account ID</strong>（32 位字符）；或打开 Account Home，从浏览器地址栏 URL 中获取（<code class="text-xs">/accounts/…</code>）。</p>
+        <p><strong>API Token (read-only)</strong>：Dashboard → <strong>My Profile（我的个人资料）</strong> → <strong>API Tokens</strong> → <strong>Create Token</strong> → <strong>Create Custom Token</strong>，为被监控账号创建<strong>只读</strong> Token。</p>
+        <p class="pl-3 border-l-2 border-[var(--input-border)]">
+          <span class="block font-medium">最低必需权限（缺一不可）：</span>
+          Account → Account Analytics → Read（Workers、D1 读/写/存储、KV、R2、Workflows 等 GraphQL 用量）<br />
+          Account → D1 → Read（REST 查询 D1 数据库个数）
+        </p>
+        <p class="pl-3 border-l-2 border-[var(--input-border)]">
+          <span class="block font-medium">建议一并勾选（按需）：</span>
+          Cloudflare Pages: Read · Workers Scripts: Read · Workers KV Storage: Read · Workers R2 Storage: Read · Queues: Read · Hyperdrive: Read · Vectorize: Read · Account Settings: Read（Verify 时显示账号名）
+        </p>
+      </div>
       <form id="account-form" class="mt-4">
         <div class="form-group">
           <label class="form-label">Account Name</label>
-          <input name="name" required class="glass-input" placeholder="Main Account" />
+          <input name="name" required class="glass-input" placeholder="主账号" />
         </div>
         <div class="form-group">
           <label class="form-label">Account ID</label>
-          <input name="accountId" required class="glass-input glass-input--mono" placeholder="32-char Cloudflare Account ID" />
+          <input name="accountId" required class="glass-input glass-input--mono" placeholder="32 位 Cloudflare Account ID" />
         </div>
         <div class="form-group">
           <label class="form-label">API Token (read-only)</label>
           <input name="apiToken" type="password" required class="glass-input glass-input--mono" placeholder="Cloudflare API Token" />
-          <p class="form-hint">Requires Account Analytics: Read and product read permissions.</p>
+          <p class="form-hint">保存前建议先点击「验证凭据」，确认 Token 有效且权限足够。</p>
         </div>
+
+        <fieldset class="alert-settings">
+          <legend class="form-label">告警设置</legend>
+          <p class="form-hint mb-3">
+            按服务启用用量百分比告警；达到阈值后通过已启用的通知渠道推送。默认不启用，需手动勾选。
+          </p>
+          <div id="alert-rules-grid" class="alert-rules-grid">
+            <p class="form-hint">加载服务列表…</p>
+          </div>
+          <div class="alert-test-row">
+            <button type="button" id="test-alert-btn" class="btn btn-secondary btn-sm">发送测试告警</button>
+            <p class="form-hint">向所有已启用通知渠道发送测试消息，验证告警推送是否正常。</p>
+          </div>
+          <p id="alert-test-message" class="form-message"></p>
+          <div id="alert-test-results" class="alert-test-results hidden"></div>
+        </fieldset>
+
         <div class="form-actions">
-          <button type="button" id="verify-btn" class="btn btn-secondary">Verify Credentials</button>
-          <button type="submit" id="submit-btn" class="btn btn-primary">Save Account</button>
-          <button type="button" id="cancel-edit-btn" class="btn btn-ghost hidden">Cancel Edit</button>
+          <button type="button" id="verify-btn" class="btn btn-secondary">验证凭据</button>
+          <button type="submit" id="submit-btn" class="btn btn-primary">保存账号</button>
+          <button type="button" id="cancel-edit-btn" class="btn btn-ghost hidden">取消编辑</button>
         </div>
         <p id="form-message" class="form-message"></p>
       </form>
     </section>
 
     <section>
-      <h2 class="section-title">Configured Accounts</h2>
-      <div id="accounts-list" class="loading-state">Loading…</div>
+      <h2 class="section-title">已配置账号</h2>
+      <p class="form-hint mb-3">拖动左侧手柄可调整在仪表盘中的显示顺序。</p>
+      <div id="accounts-list" class="loading-state">加载中…</div>
     </section>
   </main>
 

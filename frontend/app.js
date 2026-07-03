@@ -36,6 +36,7 @@ const LABEL_ZH = {
   kv_deletes: 'KV 删除',
   kv_lists: 'KV 列表',
   kv_storage_gb: 'KV 存储',
+  r2_buckets: 'R2 存储桶',
   r2_storage_gb: 'R2 存储',
   r2_class_a: 'R2 Class A 操作（写入类）',
   r2_class_b: 'R2 Class B 操作（读取类）',
@@ -82,7 +83,12 @@ const SERVICE_GROUPS = [
     id: 'r2',
     title: 'R2',
     keys: ['r2_storage_gb', 'r2_class_a', 'r2_class_b'],
-    metaFn: () => '',
+    metaFn: (quotas) => {
+      const buckets = quotas?.r2_buckets;
+      if (buckets?.available) return `${buckets.used.toLocaleString()} 个存储桶`;
+      if (buckets?.note) return buckets.note;
+      return '';
+    },
   },
 ];
 
@@ -137,9 +143,213 @@ const OTHER_GROUPS = [
   },
   {
     title: '分析',
-    keys: ['analytics_engine_writes'],
+    keys: ['analytics_engine_writes', 'workers_logs_events', 'workers_logs_bytes'],
   },
 ];
+
+const DEFAULT_ALERT_THRESHOLD = 80;
+
+let alertServiceGroups = [];
+
+async function loadAlertServiceGroups() {
+  if (alertServiceGroups.length) return alertServiceGroups;
+  try {
+    const resp = await fetch(`${API_BASE}/api/alert-service-groups`);
+    const data = await resp.json();
+    alertServiceGroups = data.groups ?? [];
+  } catch {
+    alertServiceGroups = [
+      { id: 'workers', title: 'Workers', keys: ['workers_requests', 'workers_build_minutes'] },
+      { id: 'pages', title: 'Pages', keys: ['pages_requests', 'pages_builds'] },
+      { id: 'd1', title: 'D1', keys: ['d1_reads', 'd1_writes', 'd1_storage_gb'] },
+      { id: 'kv', title: 'KV', keys: ['kv_reads', 'kv_writes', 'kv_storage_gb'] },
+      { id: 'r2', title: 'R2', keys: ['r2_storage_gb', 'r2_class_a', 'r2_class_b'] },
+    ];
+  }
+  return alertServiceGroups;
+}
+
+function getGroupStateFromRules(group, alertRules = []) {
+  const rulesByKey = new Map((alertRules ?? []).map((r) => [r.metricKey, r]));
+  const groupRules = group.keys.map((k) => rulesByKey.get(k)).filter(Boolean);
+  const enabledRules = groupRules.filter((r) => r.enabled);
+  if (!enabledRules.length) {
+    return { enabled: false, thresholdPercent: DEFAULT_ALERT_THRESHOLD };
+  }
+  return {
+    enabled: true,
+    thresholdPercent: enabledRules[0].thresholdPercent ?? DEFAULT_ALERT_THRESHOLD,
+  };
+}
+
+function renderAlertRulesGrid(alertRules = []) {
+  const grid = document.getElementById('alert-rules-grid');
+  if (!grid) return;
+
+  if (!alertServiceGroups.length) {
+    grid.innerHTML = '<p class="form-hint">加载服务列表…</p>';
+    return;
+  }
+
+  grid.innerHTML = alertServiceGroups.map((group) => {
+    const state = getGroupStateFromRules(group, alertRules);
+    return `
+      <div class="alert-service-row" data-group-id="${group.id}">
+        <label class="alert-service-row__enable">
+          <input type="checkbox" name="alertService" value="${group.id}" ${state.enabled ? 'checked' : ''} />
+          <span class="alert-service-row__title">${group.title}</span>
+        </label>
+        <div class="alert-service-row__threshold">
+          <input
+            type="number"
+            name="alertThreshold_${group.id}"
+            class="glass-input glass-input--sm alert-threshold-input"
+            min="1"
+            max="100"
+            step="1"
+            value="${state.thresholdPercent}"
+            aria-label="${group.title} 告警阈值"
+          />
+          <span class="alert-service-row__unit">%</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function setAlertFormValues(alertRules) {
+  renderAlertRulesGrid(alertRules ?? []);
+}
+
+function readAlertFormValues() {
+  const form = document.getElementById('account-form');
+  if (!form || !alertServiceGroups.length) return [];
+
+  const rules = [];
+  for (const group of alertServiceGroups) {
+    const checkbox = form.querySelector(`input[name="alertService"][value="${group.id}"]`);
+    if (!checkbox?.checked) continue;
+
+    const thresholdInput = form.querySelector(`input[name="alertThreshold_${group.id}"]`);
+    let threshold = parseInt(thresholdInput?.value ?? String(DEFAULT_ALERT_THRESHOLD), 10);
+    if (!Number.isFinite(threshold) || threshold < 1) threshold = 1;
+    if (threshold > 100) threshold = 100;
+
+    for (const metricKey of group.keys) {
+      rules.push({ metricKey, enabled: true, thresholdPercent: threshold });
+    }
+  }
+  return rules;
+}
+
+function summarizeAlertRules(alertRules) {
+  if (!alertRules?.length) return '告警：未配置';
+  const enabled = alertRules.filter((r) => r.enabled);
+  if (!enabled.length) return '告警：未配置';
+
+  const groupTitles = [];
+  for (const group of alertServiceGroups) {
+    const state = getGroupStateFromRules(group, enabled);
+    if (state.enabled) {
+      groupTitles.push(`${group.title} ≥${state.thresholdPercent}%`);
+    }
+  }
+  if (!groupTitles.length) return `告警：${enabled.length} 项指标`;
+  return `告警：${groupTitles.slice(0, 4).join(' · ')}${groupTitles.length > 4 ? ' …' : ''}`;
+}
+
+const CHANNEL_TYPE_LABELS = {
+  wecom: '企业微信',
+  feishu: '飞书',
+  dingtalk: '钉钉',
+  webhook: 'Webhook',
+  telegram: 'Telegram',
+  email: 'Email',
+};
+
+function renderAdminAlertTestResults(container, channels) {
+  if (!container) return;
+  if (!channels?.length) {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.remove('hidden');
+  container.innerHTML = channels.map((ch) => {
+    const typeLabel = CHANNEL_TYPE_LABELS[ch.channelType] || ch.channelType;
+    const statusClass = ch.ok ? 'alert-test-result--ok' : 'alert-test-result--fail';
+    const statusLabel = ch.ok ? '成功' : '失败';
+    const errorLine = ch.error
+      ? `<span class="alert-test-result__error">${ch.error}</span>`
+      : '';
+    return `
+      <div class="alert-test-result ${statusClass}">
+        <span><strong>${ch.channelName}</strong> · ${typeLabel}</span>
+        <span class="chip ${ch.ok ? 'chip--success' : 'chip--danger'}">${statusLabel}</span>
+        ${errorLine}
+      </div>
+    `;
+  }).join('');
+}
+
+async function sendAdminTestAlert() {
+  const messageEl = document.getElementById('alert-test-message');
+  const resultsEl = document.getElementById('alert-test-results');
+  const buttonEl = document.getElementById('test-alert-btn');
+
+  if (messageEl) {
+    messageEl.textContent = '';
+    messageEl.className = 'form-message';
+  }
+  if (resultsEl) {
+    resultsEl.classList.add('hidden');
+    resultsEl.innerHTML = '';
+  }
+
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.dataset.originalText = buttonEl.dataset.originalText || buttonEl.textContent;
+    buttonEl.textContent = '发送中…';
+  }
+
+  try {
+    const payload = editingAccountId ? { accountId: editingAccountId } : {};
+    const resp = await authFetch(`${API_BASE}/api/alerts/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+
+    if (resp.status === 429) {
+      throw new Error(data.error || `请 ${data.retryAfterSeconds ?? 60} 秒后再试`);
+    }
+    if (!resp.ok) throw new Error(data.error || '发送失败');
+
+    if (messageEl) {
+      messageEl.textContent = data.message || '测试告警已发送';
+      messageEl.className = `form-message ${data.ok ? 'form-message--success' : 'form-message--error'}`;
+    }
+    renderAdminAlertTestResults(resultsEl, data.channels);
+  } catch (err) {
+    if (messageEl) {
+      if (err.status === 401) {
+        messageEl.textContent = '需要登录，正在跳转…';
+        messageEl.className = 'form-message form-message--error';
+        redirectToLogin('/admin');
+        return;
+      }
+      messageEl.textContent = err.message || '发送失败';
+      messageEl.className = 'form-message form-message--error';
+    }
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = buttonEl.dataset.originalText || '发送测试告警';
+    }
+  }
+}
 
 function getLabelZh(key, metric) {
   return LABEL_ZH[key] || metric?.label || key;
@@ -545,7 +755,7 @@ function updateAutoRefreshHint() {
 
   const remainingMs = nextAutoRefreshAt - Date.now();
   if (remainingMs <= 0) {
-    hintEl.textContent = ` · 自动刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（即将刷新）`;
+    hintEl.textContent = ` · 访问刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（即将检查）`;
     return;
   }
 
@@ -553,7 +763,7 @@ function updateAutoRefreshHint() {
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;
   const countdown = min > 0 ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
-  hintEl.textContent = ` · 自动刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（${countdown} 后）`;
+  hintEl.textContent = ` · 访问刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（${countdown} 后检查）`;
 }
 
 function clearAutoRefreshTimers() {
@@ -568,24 +778,6 @@ function clearAutoRefreshTimers() {
 }
 
 async function runAutoRefreshCycle() {
-  try {
-    const meResp = await fetch(`${API_BASE}/api/me`, { credentials: 'include' });
-    const me = await meResp.json();
-    if (me.authenticated || me.devMode) {
-      const resp = await authFetch(`${API_BASE}/cron/fetch`, { method: 'POST' });
-      const data = await resp.json();
-      await loadDashboard();
-      const statsEl = document.getElementById('refresh-stats');
-      if (statsEl && data.refreshStats) {
-        const s = data.refreshStats;
-        statsEl.textContent = ` · 自动刷新 ${s.refreshed}/${s.refreshed + s.cached + s.failed}`;
-      }
-      return;
-    }
-  } catch {
-    /* fall through to snapshot-only refresh */
-  }
-
   await loadDashboard();
 }
 
@@ -606,7 +798,7 @@ function setupDashboardAutoRefresh() {
   }, intervalMs);
 
   if (hintEl) {
-    hintEl.textContent = ` · 自动刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}`;
+    hintEl.textContent = ` · 访问刷新：每 ${formatIntervalLabel(dashboardConfig.refreshIntervalMinutes)}（过期时自动拉取）`;
   }
 }
 
@@ -646,11 +838,17 @@ async function loadDashboard() {
   const data = await fetchSnapshot();
   const updated = document.getElementById('last-updated');
   const grid = document.getElementById('accounts-grid');
+  const statsEl = document.getElementById('refresh-stats');
 
   if (updated) {
     updated.textContent = data.lastUpdated
       ? new Date(data.lastUpdated).toLocaleString()
       : '从未更新';
+  }
+
+  if (statsEl && data.refreshStats) {
+    const s = data.refreshStats;
+    statsEl.textContent = ` · 已刷新 ${s.refreshed}/${s.refreshed + s.cached + s.failed}`;
   }
 
   if (!grid) return;
@@ -692,10 +890,14 @@ function resetAccountForm() {
   const submitBtn = document.getElementById('submit-btn');
   const cancelBtn = document.getElementById('cancel-edit-btn');
   const tokenInput = form.apiToken;
-  if (title) title.textContent = 'Add Account';
-  if (submitBtn) submitBtn.textContent = 'Save Account';
+  if (title) title.textContent = '添加账号';
+  if (submitBtn) submitBtn.textContent = '保存账号';
   if (cancelBtn) cancelBtn.classList.add('hidden');
-  if (tokenInput) tokenInput.required = true;
+  if (tokenInput) {
+    tokenInput.required = true;
+    tokenInput.placeholder = 'Cloudflare API Token';
+  }
+  setAlertFormValues(null);
 }
 
 function startEditAccount(account) {
@@ -706,13 +908,14 @@ function startEditAccount(account) {
   form.accountId.value = account.accountId;
   form.apiToken.value = '';
   form.apiToken.required = false;
-  form.apiToken.placeholder = `Leave blank to keep ${account.apiToken}`;
+  form.apiToken.placeholder = `留空则保留 ${account.apiToken}`;
+  setAlertFormValues(account.alertRules);
 
   const title = document.getElementById('form-title');
   const submitBtn = document.getElementById('submit-btn');
   const cancelBtn = document.getElementById('cancel-edit-btn');
-  if (title) title.textContent = `Edit Account · ${account.name}`;
-  if (submitBtn) submitBtn.textContent = 'Update Account';
+  if (title) title.textContent = `编辑账号 · ${account.name}`;
+  if (submitBtn) submitBtn.textContent = '更新账号';
   if (cancelBtn) cancelBtn.classList.remove('hidden');
 
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -727,7 +930,7 @@ async function verifyAccountForm() {
   const apiToken = form.apiToken.value.trim();
   if (!accountId || !apiToken) {
     if (msg) {
-      msg.textContent = 'Enter Account ID and API Token to verify.';
+      msg.textContent = '请先填写 Account ID 和 API Token 再验证。';
       msg.className = 'form-message form-message--error';
     }
     return;
@@ -736,7 +939,7 @@ async function verifyAccountForm() {
   const verifyBtn = document.getElementById('verify-btn');
   if (verifyBtn) {
     verifyBtn.disabled = true;
-    verifyBtn.textContent = 'Verifying…';
+    verifyBtn.textContent = '验证中…';
   }
 
   try {
@@ -747,11 +950,11 @@ async function verifyAccountForm() {
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) {
-      throw new Error(data.error || 'Verification failed');
+      throw new Error(data.error || '验证失败');
     }
     if (msg) {
-      const nameHint = data.accountName ? ` (${data.accountName})` : '';
-      msg.textContent = `Credentials verified${nameHint}.`;
+      const nameHint = data.accountName ? `（${data.accountName}）` : '';
+      msg.textContent = `凭据验证通过${nameHint}。`;
       msg.className = 'form-message form-message--success';
     }
     if (data.accountName && !form.name.value.trim()) {
@@ -760,18 +963,18 @@ async function verifyAccountForm() {
   } catch (err) {
     if (msg) {
       if (err.status === 401) {
-        msg.textContent = 'Login required. Redirecting…';
+        msg.textContent = '需要登录，正在跳转…';
         msg.className = 'form-message form-message--error';
         redirectToLogin('/admin');
         return;
       }
-      msg.textContent = err.message || 'Verification failed';
+      msg.textContent = err.message || '验证失败';
       msg.className = 'form-message form-message--error';
     }
   } finally {
     if (verifyBtn) {
       verifyBtn.disabled = false;
-      verifyBtn.textContent = 'Verify Credentials';
+      verifyBtn.textContent = '验证凭据';
     }
   }
 }
@@ -815,7 +1018,7 @@ async function submitSettingsForm(e) {
 
     dashboardConfig.refreshIntervalMinutes = data.refreshIntervalMinutes;
     if (msg) {
-      msg.textContent = `已保存：每 ${formatIntervalLabel(data.refreshIntervalMinutes)} 自动刷新。`;
+      msg.textContent = `已保存：每 ${formatIntervalLabel(data.refreshIntervalMinutes)} 访问时检查缓存。`;
       msg.className = 'form-message form-message--success';
     }
     setupDashboardAutoRefresh();
@@ -833,6 +1036,118 @@ async function submitSettingsForm(e) {
   }
 }
 
+async function reorderAccounts(accountIds) {
+  const resp = await authFetch(`${API_BASE}/api/accounts/reorder`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountIds }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json();
+    throw Object.assign(new Error(err.error || '排序失败'), { status: resp.status });
+  }
+  return resp.json();
+}
+
+function renderAdminAccountItem(account) {
+  const alertSummary = summarizeAlertRules(account.alertRules);
+
+  return `
+    <div class="list-item" data-id="${account.id}" draggable="false">
+      <button type="button" class="list-item__drag-handle" aria-label="拖动排序" title="拖动排序">
+        <span class="drag-dots" aria-hidden="true"></span>
+      </button>
+      <div class="min-w-0 flex-1">
+        <div class="list-item__header">
+          <p class="list-item__title">${account.name}</p>
+          <span class="chip ${account.enabled ? 'chip--success' : 'chip--muted'}">
+            ${account.enabled ? '已启用' : '已禁用'}
+          </span>
+        </div>
+        <p class="list-item__meta">${account.accountId}</p>
+        <p class="list-item__meta">Token: ${account.apiToken}</p>
+        <p class="list-item__meta">${alertSummary}</p>
+      </div>
+      <div class="list-item__actions">
+        <button data-id="${account.id}" data-action="edit" class="edit-btn btn btn-ghost btn-sm">编辑</button>
+        <button data-id="${account.id}" data-enabled="${account.enabled}" data-action="toggle" class="toggle-btn btn btn-ghost btn-sm">
+          ${account.enabled ? '禁用' : '启用'}
+        </button>
+        <button data-id="${account.id}" data-action="delete" class="delete-btn btn btn-danger btn-sm">删除</button>
+      </div>
+    </div>
+  `;
+}
+
+function setupAccountDragDrop(list, getAccountIds, onReordered) {
+  let draggedId = null;
+
+  list.querySelectorAll('.list-item').forEach((item) => {
+    const id = item.dataset.id;
+    const handle = item.querySelector('.list-item__drag-handle');
+
+    handle?.addEventListener('mousedown', () => {
+      item.draggable = true;
+    });
+    item.addEventListener('dragend', () => {
+      item.draggable = false;
+      item.classList.remove('list-item--dragging');
+      list.querySelectorAll('.list-item').forEach((el) => el.classList.remove('list-item--drag-over'));
+      draggedId = null;
+    });
+
+    item.addEventListener('dragstart', (e) => {
+      if (!e.dataTransfer) return;
+      draggedId = id;
+      item.classList.add('list-item--dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', id);
+    });
+
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (draggedId && draggedId !== id) {
+        item.classList.add('list-item--drag-over');
+      }
+    });
+
+    item.addEventListener('dragleave', (e) => {
+      if (!item.contains(e.relatedTarget)) {
+        item.classList.remove('list-item--drag-over');
+      }
+    });
+
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('list-item--drag-over');
+      if (!draggedId || draggedId === id) return;
+
+      const ids = getAccountIds();
+      const fromIdx = ids.indexOf(draggedId);
+      const toIdx = ids.indexOf(id);
+      if (fromIdx === -1 || toIdx === -1) return;
+
+      const nextIds = [...ids];
+      nextIds.splice(fromIdx, 1);
+      nextIds.splice(toIdx, 0, draggedId);
+
+      list.classList.add('accounts-sortable-list--busy');
+      try {
+        await onReordered(nextIds);
+      } catch (err) {
+        if (err.status === 401) {
+          redirectToLogin('/admin');
+          return;
+        }
+        alert(err.message || '排序失败');
+        loadAdmin();
+      } finally {
+        list.classList.remove('accounts-sortable-list--busy');
+      }
+    });
+  });
+}
+
 async function loadAdmin() {
   const list = document.getElementById('accounts-list');
   if (!list) return;
@@ -844,32 +1159,22 @@ async function loadAdmin() {
     list.innerHTML = `
       <div class="empty-state">
         <div class="empty-state__icon">👤</div>
-        <p>No accounts configured.</p>
+        <p>尚未配置账号。</p>
       </div>`;
     return;
   }
 
-  list.innerHTML = accounts.map((a) => `
-    <div class="list-item">
-      <div class="min-w-0 flex-1">
-        <div class="list-item__header">
-          <p class="list-item__title">${a.name}</p>
-          <span class="chip ${a.enabled ? 'chip--success' : 'chip--muted'}">
-            ${a.enabled ? 'Enabled' : 'Disabled'}
-          </span>
-        </div>
-        <p class="list-item__meta">${a.accountId}</p>
-        <p class="list-item__meta">Token: ${a.apiToken}</p>
-      </div>
-      <div class="list-item__actions">
-        <button data-id="${a.id}" data-action="edit" class="edit-btn btn btn-ghost btn-sm">Edit</button>
-        <button data-id="${a.id}" data-enabled="${a.enabled}" data-action="toggle" class="toggle-btn btn btn-ghost btn-sm">
-          ${a.enabled ? 'Disable' : 'Enable'}
-        </button>
-        <button data-id="${a.id}" data-action="delete" class="delete-btn btn btn-danger btn-sm">Delete</button>
-      </div>
-    </div>
-  `).join('');
+  list.className = 'accounts-sortable-list';
+  list.innerHTML = accounts.map(renderAdminAccountItem).join('');
+
+  setupAccountDragDrop(
+    list,
+    () => [...list.querySelectorAll('.list-item')].map((el) => el.dataset.id),
+    async (accountIds) => {
+      await reorderAccounts(accountIds);
+      loadAdmin();
+    },
+  );
 
   list.querySelectorAll('[data-action]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -893,7 +1198,7 @@ async function loadAdmin() {
       }
 
       if (action === 'delete') {
-        if (!confirm('Delete this account?')) return;
+        if (!confirm('确定删除此账号？')) return;
         await authFetch(`${API_BASE}/api/accounts/${id}`, { method: 'DELETE' });
         if (editingAccountId === id) resetAccountForm();
         loadAdmin();
@@ -906,16 +1211,22 @@ async function submitAccountForm(e) {
   e.preventDefault();
   const form = e.target;
   const msg = document.getElementById('form-message');
+  const alertRules = readAlertFormValues();
   const payload = {
     name: form.name.value.trim(),
     accountId: form.accountId.value.trim(),
     apiToken: form.apiToken.value.trim(),
+    alertRules,
   };
 
   try {
     let resp;
     if (editingAccountId) {
-      const body = { name: payload.name, accountId: payload.accountId };
+      const body = {
+        name: payload.name,
+        accountId: payload.accountId,
+        alertRules: payload.alertRules,
+      };
       if (payload.apiToken) body.apiToken = payload.apiToken;
       resp = await authFetch(`${API_BASE}/api/accounts/${editingAccountId}`, {
         method: 'PUT',
@@ -932,20 +1243,20 @@ async function submitAccountForm(e) {
 
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.error || 'Failed to save account');
+      throw new Error(err.error || '保存账号失败');
     }
 
     const wasEdit = !!editingAccountId;
     resetAccountForm();
     if (msg) {
-      msg.textContent = wasEdit ? 'Account updated.' : 'Account added successfully.';
+      msg.textContent = wasEdit ? '账号已更新。' : '账号添加成功。';
       msg.className = 'form-message form-message--success';
     }
     loadAdmin();
   } catch (err) {
     if (msg) {
       if (err.status === 401) {
-        msg.textContent = 'Login required. Redirecting…';
+        msg.textContent = '需要登录，正在跳转…';
         msg.className = 'form-message form-message--error';
         redirectToLogin('/admin');
         return;
@@ -973,6 +1284,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (form) {
     const { requirePageAuth } = await import('./auth.js');
     await requirePageAuth();
+    await loadAlertServiceGroups();
+    renderAlertRulesGrid();
     form.addEventListener('submit', submitAccountForm);
     loadAdmin();
     loadDashboardSettings();
@@ -985,6 +1298,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const cancelBtn = document.getElementById('cancel-edit-btn');
     if (cancelBtn) cancelBtn.addEventListener('click', resetAccountForm);
+
+    const testAlertBtn = document.getElementById('test-alert-btn');
+    if (testAlertBtn) testAlertBtn.addEventListener('click', sendAdminTestAlert);
   }
 });
 

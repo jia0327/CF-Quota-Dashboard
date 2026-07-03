@@ -86,6 +86,12 @@ export const DEFAULT_FREE_TIER_LIMITS: FreeTierLimitsConfig = {
     unit: 'ops',
     label: 'R2 Class B Ops (reads)',
   },
+  r2_buckets: {
+    limit: 1_000_000,
+    period: 'total',
+    unit: 'buckets',
+    label: 'R2 Total Buckets',
+  },
   workers_build_minutes: {
     limit: 3_000,
     period: 'monthly',

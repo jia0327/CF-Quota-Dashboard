@@ -32,9 +32,16 @@
     btn.className = 'theme-toggle theme-toggle--top-left';
     btn.addEventListener('click', toggleTheme);
     const topbar = document.querySelector('.dashboard-topbar');
+    const navInner = document.querySelector('.glass-nav__inner');
     if (topbar) {
       topbar.insertBefore(btn, topbar.firstChild);
+    } else if (navInner) {
+      navInner.insertBefore(btn, navInner.firstChild);
+    } else if (document.body.classList.contains('login-page')) {
+      btn.className = 'theme-toggle theme-toggle--fixed-corner';
+      document.body.appendChild(btn);
     } else {
+      btn.className = 'theme-toggle';
       document.body.appendChild(btn);
     }
     updateToggleButton(getTheme());
