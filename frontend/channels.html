@@ -14,8 +14,8 @@
   <header class="glass-nav">
     <div class="glass-nav__inner glass-nav__inner--wide">
       <div class="glass-nav__brand">
-        <h1>通知渠道管理</h1>
-        <p>配置告警推送目标 · <span id="enabled-count" class="channels-enabled-count">0</span> 个已启用</p>
+        <h1>CF 配额仪表盘</h1>
+        <p>多账号 Cloudflare 额度监控</p>
       </div>
       <nav class="glass-nav__links">
         <a href="/" class="nav-link">仪表盘</a>
@@ -28,15 +28,40 @@
   </header>
 
   <main class="page-main page-main--wide">
-    <div class="channels-layout">
-      <aside>
-        <section class="glass-card">
-          <h2 class="section-title section-title--sm">添加渠道</h2>
-          <div class="type-grid" id="type-buttons"></div>
-        </section>
+    <header class="channels-page-header">
+      <div class="channels-page-header__main">
+        <h1 class="channels-page-header__title">
+          <span class="channels-page-header__icon" aria-hidden="true"><i class="fas fa-bell"></i></span>
+          通知渠道管理
+        </h1>
+        <p class="channels-page-header__subtitle">配置配额告警推送目标</p>
+        <span class="channels-page-header__badge">
+          启用 <span id="enabled-count">0</span> / <span id="total-count">0</span>
+        </span>
+      </div>
+      <div class="channels-page-header__actions">
+        <button type="button" id="test-all-alerts-btn" class="btn btn-secondary btn-sm channels-page-header__test-all">
+          <i class="fas fa-paper-plane" aria-hidden="true"></i>
+          发送测试告警
+        </button>
+        <button type="button" id="add-channel-btn" class="btn-add-account">
+          <span class="btn-add-account__icon" aria-hidden="true">+</span>
+          添加渠道
+        </button>
+      </div>
+    </header>
 
-        <section id="channel-form-section" class="hidden mt-4 glass-card">
-          <h2 id="form-title" class="section-title section-title--sm">新建渠道</h2>
+    <p id="test-all-message" class="form-message channels-page-header__message"></p>
+    <div id="test-all-results" class="alert-test-results hidden"></div>
+
+    <div class="channels-layout">
+      <section id="channels-add-panel" class="channels-panel glass-card">
+        <h2 class="channels-panel__title">选择或添加渠道</h2>
+        <p class="channels-panel__hint">从右侧选择已有渠道，或直接选择一种类型开始添加</p>
+        <div class="type-grid" id="type-buttons"></div>
+
+        <section id="channel-form-section" class="channels-form hidden">
+          <h3 id="form-title" class="channels-form__title">新建渠道</h3>
           <form id="channel-form" class="space-y-3">
             <input type="hidden" name="id" />
             <input type="hidden" name="type" />
@@ -56,19 +81,17 @@
             <p id="form-message" class="form-message"></p>
           </form>
         </section>
-      </aside>
+      </section>
 
-      <section class="channels-main">
-        <div class="channels-toolbar glass-card channels-toolbar--compact">
-          <h2 class="section-title section-title--sm channels-toolbar__title">已配置渠道</h2>
-          <button type="button" id="test-all-alerts-btn" class="btn btn-secondary btn-sm">
-            <i class="fas fa-paper-plane" aria-hidden="true"></i>
-            发送测试告警
+      <section class="channels-panel glass-card channels-main">
+        <div class="channels-panel__head">
+          <h2 class="channels-panel__title">渠道列表</h2>
+          <button type="button" id="refresh-channels-btn" class="icon-btn icon-btn--sm" aria-label="刷新渠道列表" title="刷新">
+            <i class="fas fa-arrows-rotate" aria-hidden="true"></i>
           </button>
         </div>
-        <p id="test-all-message" class="form-message channels-toolbar__message"></p>
-        <div id="test-all-results" class="alert-test-results hidden"></div>
-        <div id="channels-list" class="channels-list loading-state">Loading…</div>
+        <p class="channels-panel__hint">点击渠道卡片可编辑配置</p>
+        <div id="channels-list" class="channels-list loading-state">加载中…</div>
       </section>
     </div>
   </main>

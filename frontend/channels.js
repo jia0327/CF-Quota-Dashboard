@@ -50,15 +50,6 @@ const TYPE_INFO = {
   },
 };
 
-const TYPE_BADGE = {
-  wecom: 'chip--wecom',
-  feishu: 'chip--feishu',
-  dingtalk: 'chip--dingtalk',
-  webhook: 'chip--webhook',
-  telegram: 'chip--telegram',
-  email: 'chip--email',
-};
-
 const CONFIG_FIELDS = {
   wecom: [
     { key: 'webhookUrl', label: 'Webhook URL', type: 'password', required: true, placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...' },
@@ -141,6 +132,7 @@ function showForm(type, channel = null) {
   const section = document.getElementById('channel-form-section');
   const form = document.getElementById('channel-form');
   const title = document.getElementById('form-title');
+  const panel = document.getElementById('channels-add-panel');
   const resolvedType = channel?.type || type;
   const info = getTypeInfo(resolvedType);
 
@@ -158,10 +150,22 @@ function showForm(type, channel = null) {
     </span>
   `;
   renderConfigFields(resolvedType, channel?.config || {});
+
+  panel?.classList.add('channels-panel--highlight');
+  window.setTimeout(() => panel?.classList.remove('channels-panel--highlight'), 1200);
+  section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function hideForm() {
-  document.getElementById('channel-form-section').classList.add('hidden');
+  document.getElementById('channel-form-section')?.classList.add('hidden');
+}
+
+function focusAddPanel() {
+  hideForm();
+  const panel = document.getElementById('channels-add-panel');
+  panel?.classList.add('channels-panel--highlight');
+  window.setTimeout(() => panel?.classList.remove('channels-panel--highlight'), 1200);
+  panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function fetchChannels() {
@@ -169,81 +173,133 @@ async function fetchChannels() {
   return resp.json();
 }
 
-function getPrimaryConfigRow(channel) {
-  const fields = CONFIG_FIELDS[channel.type] || [];
-  const primary = fields.find((f) => channel.config?.[f.key]) || fields[0];
-  if (!primary) return { label: '配置', value: '—' };
-
-  const value = channel.config[primary.key] || '—';
-  return { label: primary.label, value };
+function renderToggleSwitch(channel) {
+  const onClass = channel.enabled ? ' toggle-switch--on' : '';
+  const label = channel.enabled ? '禁用渠道' : '启用渠道';
+  return `
+    <button
+      type="button"
+      data-action="toggle"
+      data-id="${channel.id}"
+      class="toggle-switch${onClass}"
+      aria-label="${label}"
+      aria-pressed="${channel.enabled}"
+      title="${label}"
+    >
+      <span class="toggle-switch__track" aria-hidden="true">
+        <span class="toggle-switch__thumb"></span>
+      </span>
+    </button>
+  `;
 }
 
 function renderChannelCard(channel) {
   const info = getTypeInfo(channel.type);
-  const badgeClass = TYPE_BADGE[channel.type] || 'chip--muted';
-  const { label: configLabel, value: configValue } = getPrimaryConfigRow(channel);
-  const toggleBtnClass = channel.enabled
-    ? 'account-card__btn account-card__btn--disable'
-    : 'account-card__btn account-card__btn--enable';
+  const statusClass = channel.enabled ? 'channel-card__status--enabled' : 'channel-card__status--disabled';
 
   return `
-    <div class="channel-card">
-      <div class="channel-card__panel">
-        <div class="channel-card__header">
-          <div class="channel-card__identity">
-            ${renderChannelIcon(channel.type, 'sm')}
+    <article class="channel-card" data-id="${channel.id}" tabindex="0" role="button" aria-label="编辑 ${channel.name}">
+      <div class="channel-card__main">
+        ${renderChannelIcon(channel.type, 'sm')}
+        <div class="channel-card__info">
+          <div class="channel-card__title-row">
             <h3 class="channel-card__title">${channel.name}</h3>
-          </div>
-          <div class="channel-card__badges">
-            <span class="chip ${badgeClass}">${info.label}</span>
-            <span class="chip ${channel.enabled ? 'chip--success' : 'chip--muted'}">
+            <span class="channel-card__status ${statusClass}">
+              <span class="channel-card__status-dot" aria-hidden="true"></span>
               ${channel.enabled ? '已启用' : '已禁用'}
             </span>
           </div>
-        </div>
-        <div class="channel-card__body">
           <p class="channel-card__desc">${info.desc}</p>
-          <div class="account-card__row">
-            <span class="account-card__label">${configLabel}:</span>
-            <span class="account-card__value account-card__value--mono account-card__value--truncate" title="${configValue}">${configValue}</span>
-          </div>
-        </div>
-        <div class="account-card__footer">
-          <button data-action="toggle" data-id="${channel.id}" class="${toggleBtnClass}">
-            ${channel.enabled ? '禁用' : '启用'}
-          </button>
-          <button data-action="test" data-id="${channel.id}" class="account-card__btn account-card__btn--edit">测试</button>
-          <button data-action="edit" data-id="${channel.id}" class="account-card__btn account-card__btn--edit">编辑</button>
-          <button data-action="delete" data-id="${channel.id}" class="account-card__btn account-card__btn--delete">删除</button>
         </div>
       </div>
-    </div>
+      <div class="channel-card__actions">
+        ${renderToggleSwitch(channel)}
+        <button type="button" data-action="test" data-id="${channel.id}" class="btn btn-test-pill">测试</button>
+        <button type="button" data-action="edit" data-id="${channel.id}" class="icon-btn icon-btn--sm" aria-label="编辑 ${channel.name}" title="编辑">
+          <i class="fas fa-pen" aria-hidden="true"></i>
+        </button>
+        <button type="button" data-action="delete" data-id="${channel.id}" class="icon-btn icon-btn--sm icon-btn--danger" aria-label="删除 ${channel.name}" title="删除">
+          <i class="fas fa-trash" aria-hidden="true"></i>
+        </button>
+      </div>
+    </article>
   `;
 }
 
-async function loadChannels() {
+function updateChannelCounts(channels) {
+  const enabledEl = document.getElementById('enabled-count');
+  const totalEl = document.getElementById('total-count');
+  const enabled = channels.filter((c) => c.enabled).length;
+
+  if (enabledEl) enabledEl.textContent = String(enabled);
+  if (totalEl) totalEl.textContent = String(channels.length);
+}
+
+async function loadChannels(options = {}) {
+  const { refreshBtn } = options;
   const list = document.getElementById('channels-list');
-  const countEl = document.getElementById('enabled-count');
-  const channels = await fetchChannels();
 
-  if (countEl) {
-    countEl.textContent = String(channels.filter((c) => c.enabled).length);
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.querySelector('i')?.classList.add('icon-btn--spin');
   }
 
-  if (!channels.length) {
+  try {
+    const channels = await fetchChannels();
+    updateChannelCounts(channels);
+
+    if (!channels.length) {
+      list.innerHTML = `
+        <div class="empty-state channels-list__empty">
+          <div class="empty-state__icon"><i class="fas fa-bell-slash"></i></div>
+          <p>尚未配置通知渠道</p>
+          <p class="channels-panel__hint">从左侧选择渠道类型开始添加</p>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = channels.map(renderChannelCard).join('');
+    bindChannelCardEvents(list);
+  } catch {
     list.innerHTML = `
-      <div class="empty-state glass-card channels-list__empty">
-        <div class="empty-state__icon"><i class="fas fa-bell-slash"></i></div>
-        <p>尚未配置通知渠道。</p>
-        <p class="form-hint">从左侧选择渠道类型开始添加。</p>
+      <div class="empty-state channels-list__empty">
+        <p>加载失败，请稍后重试</p>
       </div>`;
-    return;
+  } finally {
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.querySelector('i')?.classList.remove('icon-btn--spin');
+    }
   }
+}
 
-  list.innerHTML = channels.map(renderChannelCard).join('');
-
+function bindChannelCardEvents(list) {
   list.querySelectorAll('button[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => handleAction(btn));
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleAction(btn);
+    });
+  });
+
+  list.querySelectorAll('.channel-card').forEach((card) => {
+    const openEdit = async () => {
+      const id = card.getAttribute('data-id');
+      const channels = await fetchChannels();
+      const channel = channels.find((c) => c.id === id);
+      if (channel) showForm(channel.type, channel);
+    };
+
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      openEdit();
+    });
+
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openEdit();
+      }
+    });
   });
 }
 
@@ -277,7 +333,7 @@ async function sendTestAlert(options = {}) {
   const { accountId, messageEl, resultsEl, buttonEl } = options;
   if (messageEl) {
     messageEl.textContent = '';
-    messageEl.className = 'form-message';
+    messageEl.className = 'form-message channels-page-header__message';
   }
   if (resultsEl) {
     resultsEl.classList.add('hidden');
@@ -286,8 +342,8 @@ async function sendTestAlert(options = {}) {
 
   if (buttonEl) {
     buttonEl.disabled = true;
-    buttonEl.dataset.originalText = buttonEl.dataset.originalText || buttonEl.textContent;
-    buttonEl.textContent = '发送中…';
+    buttonEl.dataset.originalText = buttonEl.dataset.originalText || buttonEl.textContent.trim();
+    buttonEl.innerHTML = '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i> 发送中…';
   }
 
   let rateLimited = false;
@@ -313,18 +369,18 @@ async function sendTestAlert(options = {}) {
 
     if (messageEl) {
       messageEl.textContent = data.message || '测试告警已发送';
-      messageEl.className = `form-message ${data.ok ? 'form-message--success' : 'form-message--error'}`;
+      messageEl.className = `form-message channels-page-header__message ${data.ok ? 'form-message--success' : 'form-message--error'}`;
     }
     renderAlertTestResults(resultsEl, data.channels);
   } catch (err) {
     if (messageEl) {
       messageEl.textContent = err.message || '发送失败';
-      messageEl.className = 'form-message form-message--error';
+      messageEl.className = 'form-message channels-page-header__message form-message--error';
     }
   } finally {
     if (buttonEl && !rateLimited) {
       buttonEl.disabled = false;
-      buttonEl.textContent = buttonEl.dataset.originalText || '发送测试告警';
+      buttonEl.innerHTML = '<i class="fas fa-paper-plane" aria-hidden="true"></i> 发送测试告警';
     }
   }
 }
@@ -349,8 +405,13 @@ async function handleAction(btn) {
   }
 
   if (action === 'toggle') {
-    await authFetch(`${API_BASE}/api/channels/${id}/toggle`, { method: 'PATCH' });
-    loadChannels();
+    btn.disabled = true;
+    try {
+      await authFetch(`${API_BASE}/api/channels/${id}/toggle`, { method: 'PATCH' });
+      await loadChannels();
+    } finally {
+      btn.disabled = false;
+    }
     return;
   }
 
@@ -440,6 +501,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('cancel-form')?.addEventListener('click', hideForm);
   document.getElementById('channel-form')?.addEventListener('submit', submitChannelForm);
+
+  document.getElementById('add-channel-btn')?.addEventListener('click', focusAddPanel);
+
+  document.getElementById('refresh-channels-btn')?.addEventListener('click', () => {
+    loadChannels({ refreshBtn: document.getElementById('refresh-channels-btn') });
+  });
 
   document.getElementById('test-all-alerts-btn')?.addEventListener('click', () => {
     sendTestAlert({
