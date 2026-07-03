@@ -68,7 +68,7 @@
 | **按账号告警** | 按服务勾选阈值；默认不启用，需手动配置 |
 | **多通道通知** | 企业微信、飞书、钉钉、Webhook、Telegram、Email |
 | **公开 API** | `GET /api/public/snapshot?token=` 供外部集成 |
-| **GitHub Actions** | 推送到 `master` 自动部署 |
+| **GitHub Actions** | 推送 `master` 自动部署，效果与一键部署相同 |
 
 ---
 
@@ -113,25 +113,45 @@
 
 ## 🛠️ 部署指南
 
-**Wrangler CLI（推荐）：**
+需 [Node.js 18+](https://nodejs.org/)。整段复制粘贴对应代码块即可（Mac / Linux / Git Bash → Bash，Windows → PowerShell）。
+
+### Bash / Git Bash
 
 ```bash
+# 运行前修改下方密码、API Token 与语言（zh/en）。
+# API Token 创建步骤见 docs/DEPLOY.md「前置条件」。
+# 运行中会打开浏览器完成 wrangler 登录。
+# 部署成功后打开终端输出的地址；脚本会自动添加当前 Cloudflare 账号为监控账号。
 git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
 cd CF-Quota-Dashboard
 npm install
-npx wrangler login          # 本地 CLI 部署必须先登录
-npx wrangler whoami         # 核对 Account ID 与 Dashboard 右侧栏一致
-# 创建 KV 命名空间 → 将 id 写入 wrangler.toml 的 YOUR_KV_NAMESPACE_ID
-npx wrangler kv namespace create CF-Quota-Dashboard
-npx wrangler secret put PASSWORD --config wrangler.toml
-npm run deploy
+export QUICK_DEPLOY_PASSWORD='your-strong-password'  # ← 修改密码（/admin 登录用）
+export QUICK_DEPLOY_API_TOKEN='your-api-token'       # ← 修改 API Token（拉取配额用）
+export QUICK_DEPLOY_LANG=zh                          # ← 修改语言（zh 或 en）
+npm run quick-deploy
 ```
 
-本地 CLI 部署前需 `npx wrangler login` 登录，并用 `npx wrangler whoami` 确认 Account ID 与 [Cloudflare Dashboard](https://dash.cloudflare.com/) 一致（多账号时可在 `wrangler.toml` 设置 `account_id` 或 `CLOUDFLARE_ACCOUNT_ID` 锁定）。生产环境需先创建 KV 命名空间（`wrangler kv namespace create CF-Quota-Dashboard`），绑定到 Worker（变量名 **`KV`**），并设置 `PASSWORD` Secret。GitHub Actions 通过 **`CLOUDFLARE_ACCOUNT_ID`** Secret 指定同一目标账号。主配置文件为仓库根目录 **`wrangler.toml`**；在 `worker/` 目录内单独部署时仍可使用 **`worker/wrangler.toml`**。GitHub Actions 未设置 `KV_NAMESPACE_ID` 时会自动查找或创建标题为 **`CF-Quota-Dashboard`** 的命名空间；若使用其他名称，请在 Secrets 中填入其 ID。
+### Windows PowerShell
 
-**其他方式：** [GitHub Actions 自动部署](docs/DEPLOY.md#方法三github-actions-自动部署) · [Dashboard Connect Git](docs/DEPLOY.md#2-连接-github推荐)
+```powershell
+# 运行前修改下方密码、API Token 与语言（zh/en）。
+# API Token 创建步骤见 docs/DEPLOY.md「前置条件」。
+# 运行中会打开浏览器完成 wrangler 登录。
+# 部署成功后打开终端输出的地址；脚本会自动添加当前 Cloudflare 账号为监控账号。
+git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
+cd CF-Quota-Dashboard
+npm install
+$env:QUICK_DEPLOY_PASSWORD='your-strong-password'  # ← 修改密码（/admin 登录用）
+$env:QUICK_DEPLOY_API_TOKEN='your-api-token'     # ← 修改 API Token（拉取配额用）
+$env:QUICK_DEPLOY_LANG='zh'                       # ← 修改语言（zh 或 en）
+npm run quick-deploy
+```
 
-👉 **完整步骤、环境变量与故障排查见 [docs/DEPLOY.md](docs/DEPLOY.md)**
+**前置条件：** 浏览器已登录 [Cloudflare](https://dash.cloudflare.com/)；[API Token 已获取](docs/DEPLOY.md#前置条件)。完整步骤见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+
+### GitHub Actions
+
+Fork 仓库后，配置 3 个 Secret（`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`PASSWORD`），推送 `master` 即自动部署，效果与一键部署相同。详见 [docs/DEPLOY.md §2](docs/DEPLOY.md#2-github-actions-部署)。
 
 ---
 
@@ -176,7 +196,7 @@ npm run deploy
 | 存储 | Cloudflare KV（AES-GCM 字段加密） |
 | 前端 | 原生 HTML + CSS + JS（Workers Assets） |
 | 数据采集 | Cloudflare GraphQL Analytics + REST API |
-| CI/CD | GitHub Actions + Wrangler |
+| CI/CD | Wrangler + GitHub Actions |
 
 ---
 

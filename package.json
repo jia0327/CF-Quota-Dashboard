@@ -6,7 +6,8 @@
     "postinstall": "npm install --prefix worker --no-fund --no-audit",
     "typecheck": "npm run typecheck --prefix worker",
     "deploy": "wrangler deploy --config wrangler.toml",
-    "dev": "wrangler dev --config wrangler.toml"
+    "dev": "wrangler dev --config wrangler.toml",
+    "quick-deploy": "node scripts/quick-deploy.mjs"
   },
   "dependencies": {
     "hono": "^4.7.4"

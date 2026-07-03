@@ -1,5 +1,5 @@
 import { setupNavAuth, authFetch, parseJsonResponse, redirectToLogin } from './auth.js';
-import { escapeHtml } from './utils.js';
+import { escapeHtml, showToast } from './utils.js';
 
 const API_BASE = window.location.origin;
 
@@ -1104,16 +1104,12 @@ function openModalEdit(account) {
 
 async function verifyAccountForm() {
   const form = document.getElementById('account-form');
-  const msg = document.getElementById('form-message');
   if (!form) return;
 
   const accountId = form.accountId.value.trim();
   const apiToken = form.apiToken.value.trim();
   if (!accountId || !apiToken) {
-    if (msg) {
-      msg.textContent = '请先填写 Account ID 和 API Token 再验证。';
-      msg.className = 'form-message form-message--error';
-    }
+    showToast('请先填写 Account ID 和 API Token 再验证。', 'error');
     return;
   }
 
@@ -1133,25 +1129,18 @@ async function verifyAccountForm() {
     if (!resp.ok || !data.ok) {
       throw new Error(data.error || '验证失败');
     }
-    if (msg) {
-      const nameHint = data.accountName ? `（${data.accountName}）` : '';
-      msg.textContent = `凭据验证通过${nameHint}。`;
-      msg.className = 'form-message form-message--success';
-    }
+    const nameHint = data.accountName ? `（${data.accountName}）` : '';
+    showToast(`凭据验证通过${nameHint}。`, 'success');
     if (data.accountName && !form.name.value.trim()) {
       form.name.value = data.accountName;
     }
   } catch (err) {
-    if (msg) {
-      if (err.status === 401) {
-        msg.textContent = '需要登录，正在跳转…';
-        msg.className = 'form-message form-message--error';
-        redirectToLogin('/admin');
-        return;
-      }
-      msg.textContent = err.message || '验证失败';
-      msg.className = 'form-message form-message--error';
+    if (err.status === 401) {
+      showToast('需要登录，正在跳转…', 'error');
+      redirectToLogin('/admin');
+      return;
     }
+    showToast(err.message || '验证失败', 'error');
   } finally {
     if (verifyBtn) {
       verifyBtn.disabled = false;

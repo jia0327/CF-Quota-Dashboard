@@ -1,15 +1,9 @@
-# Deploy CF-Quota-Dashboard Worker to Cloudflare.
+# Deploy CF-Quota-Dashboard (same flow as npm run quick-deploy).
 #
 # Required repository secrets:
-#   CLOUDFLARE_API_TOKEN  - API token with Workers Scripts + KV Edit
-#   CLOUDFLARE_ACCOUNT_ID - Account ID hosting the Worker
-#
-# Optional repository secrets:
-#   KV_NAMESPACE_ID       - KV namespace id; if unset, CI finds or creates title "CF-Quota-Dashboard"
-#   PASSWORD              - Admin login code; synced to Worker via wrangler secret put
-#
-# wrangler.toml at repo root keeps placeholder YOUR_KV_NAMESPACE_ID; Resolve KV patches it at deploy time.
-# Worker secrets (PASSWORD) are NOT set from GitHub unless PASSWORD secret is configured below.
+#   CLOUDFLARE_API_TOKEN  — API token from 前置条件 (deploy + monitor)
+#   CLOUDFLARE_ACCOUNT_ID — Cloudflare account ID
+#   PASSWORD              — /admin login code
 
 name: Deploy CF Quota Dashboard
 
@@ -28,77 +22,16 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: worker/package-lock.json
 
       - name: Install dependencies
-        working-directory: worker
         run: npm ci || npm install
 
       - name: Typecheck
-        working-directory: worker
         run: npm run typecheck
 
-      # Replace YOUR_KV_NAMESPACE_ID in root wrangler.toml before deploy.
-      - name: Resolve KV namespace
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
-        run: |
-          if [ -n "$KV_NAMESPACE_ID" ]; then
-            ID="$KV_NAMESPACE_ID"
-          else
-            LIST=$(curl -sf \
-              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces?per_page=100" \
-              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-              -H "Content-Type: application/json")
-            ID=$(node -e "
-              const data = JSON.parse(process.argv[1]);
-              if (!data.success) {
-                console.error(JSON.stringify(data.errors ?? data));
-                process.exit(1);
-              }
-              const ns = data.result.find((n) => n.title === 'CF-Quota-Dashboard');
-              process.stdout.write(ns?.id ?? '');
-            " "$LIST")
-            if [ -z "$ID" ]; then
-              CREATE=$(curl -sf -X POST \
-                "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces" \
-                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d '{"title":"CF-Quota-Dashboard"}')
-              ID=$(node -e "
-                const data = JSON.parse(process.argv[1]);
-                if (!data.success) {
-                  console.error(JSON.stringify(data.errors ?? data));
-                  process.exit(1);
-                }
-                process.stdout.write(data.result.id);
-              " "$CREATE")
-              echo "Created KV namespace CF-Quota-Dashboard: $ID"
-            fi
-          fi
-          sed -i "s/YOUR_KV_NAMESPACE_ID/$ID/" wrangler.toml
-          echo "Using KV namespace: $ID"
-
-      - name: Deploy Worker
-        working-directory: worker
-        run: npx wrangler deploy --config ../wrangler.toml
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      # Optional: set PASSWORD repository secret to enable admin auth after CI deploy.
-      - name: Sync PASSWORD secret (optional)
-        working-directory: worker
+      - name: Deploy to Cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PASSWORD: ${{ secrets.PASSWORD }}
-        run: |
-          if [ -n "$PASSWORD" ]; then
-            echo "$PASSWORD" | npx wrangler secret put PASSWORD --config ../wrangler.toml
-            echo "PASSWORD secret synced to Worker"
-          else
-            echo "PASSWORD repository secret not set; Worker remains in Dev mode until you run: wrangler secret put PASSWORD"
-          fi
+        run: node scripts/ci-deploy.mjs

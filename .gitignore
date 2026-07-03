@@ -4,5 +4,3 @@ dist/
 .dev.vars
 .env
 *.log
-worker/wrangler.deploy.toml
-wrangler.deploy.toml

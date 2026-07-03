@@ -1389,6 +1389,91 @@ select.glass-input option {
   color: var(--danger);
 }
 
+/* ── Toast notifications ── */
+.toast-container {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(calc(100% - 2rem), 28rem);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 0.75rem;
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  opacity: 0;
+  transform: translateY(-0.5rem);
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.toast--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast--leaving {
+  opacity: 0;
+  transform: translateY(-0.5rem);
+}
+
+.toast__icon {
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+  font-size: 1rem;
+}
+
+.toast__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast--success {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--card-border));
+  background: color-mix(in srgb, var(--success-bg) 70%, var(--card-bg));
+}
+
+.toast--success .toast__icon {
+  color: var(--success);
+}
+
+.toast--error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--card-border));
+  background: color-mix(in srgb, var(--danger-bg) 70%, var(--card-bg));
+}
+
+.toast--error .toast__icon {
+  color: var(--danger);
+}
+
+.toast--info {
+  border-color: color-mix(in srgb, var(--info) 45%, var(--card-border));
+  background: color-mix(in srgb, var(--info-bg) 70%, var(--card-bg));
+}
+
+.toast--info .toast__icon {
+  color: var(--info);
+}
+
 /* ── Buttons ── */
 .btn {
   display: inline-flex;
