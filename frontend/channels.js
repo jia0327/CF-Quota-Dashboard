@@ -2,13 +2,51 @@ import { requirePageAuth, setupNavAuth, authFetch } from './auth.js';
 
 const API_BASE = window.location.origin;
 
-const TYPE_LABELS = {
-  wecom: '企业微信',
-  feishu: '飞书',
-  dingtalk: '钉钉',
-  webhook: 'Webhook',
-  telegram: 'Telegram',
-  email: 'Email',
+const TYPE_INFO = {
+  wecom: {
+    iconClass: 'fab fa-weixin',
+    colorClass: 'channel-icon--wecom',
+    bgClass: 'channel-icon-bg--wecom',
+    label: '企业微信',
+    desc: '适合企业微信群机器人',
+  },
+  feishu: {
+    iconClass: 'fas fa-paper-plane',
+    colorClass: 'channel-icon--feishu',
+    bgClass: 'channel-icon-bg--feishu',
+    label: '飞书',
+    desc: '适合飞书群机器人',
+  },
+  dingtalk: {
+    iconClass: 'fas fa-comment-dots',
+    colorClass: 'channel-icon--dingtalk',
+    bgClass: 'channel-icon-bg--dingtalk',
+    label: '钉钉',
+    desc: '适合钉钉自定义机器人',
+  },
+  webhook: {
+    iconClass: 'fas fa-link',
+    colorClass: 'channel-icon--webhook',
+    bgClass: 'channel-icon-bg--webhook',
+    label: 'Webhook',
+    desc: '推送到自定义 HTTP 接口',
+  },
+  telegram: {
+    iconClass: 'fab fa-telegram',
+    colorClass: 'channel-icon--telegram',
+    bgClass: 'channel-icon-bg--telegram',
+    label: 'Telegram',
+    desc: '通过 Bot 推送到聊天',
+    badge: '海外',
+  },
+  email: {
+    iconClass: 'fas fa-envelope',
+    colorClass: 'channel-icon--email',
+    bgClass: 'channel-icon-bg--email',
+    label: 'Email',
+    desc: '通过邮件中继发送告警',
+    badge: '海外',
+  },
 };
 
 const TYPE_BADGE = {
@@ -44,6 +82,42 @@ const CONFIG_FIELDS = {
   ],
 };
 
+function getTypeInfo(type) {
+  return TYPE_INFO[type] || {
+    iconClass: 'fas fa-bell',
+    colorClass: 'channel-icon--muted',
+    bgClass: 'channel-icon-bg--muted',
+    label: type || '未知渠道',
+    desc: '自定义通知渠道',
+  };
+}
+
+function renderChannelIcon(type, size = 'md') {
+  const info = getTypeInfo(type);
+  return `
+    <span class="channel-icon channel-icon--${size} ${info.bgClass}" aria-hidden="true">
+      <i class="${info.iconClass} ${info.colorClass}"></i>
+    </span>
+  `;
+}
+
+function renderTypeButtons() {
+  const container = document.getElementById('type-buttons');
+  if (!container) return;
+
+  container.innerHTML = Object.entries(TYPE_INFO).map(([type, info]) => `
+    <button type="button" data-type="${type}" class="type-btn">
+      ${renderChannelIcon(type, 'sm')}
+      <span class="type-btn__label">${info.label}</span>
+      ${info.badge ? `<span class="type-btn__badge">${info.badge}</span>` : ''}
+    </button>
+  `).join('');
+
+  container.querySelectorAll('.type-btn').forEach((btn) => {
+    btn.addEventListener('click', () => showForm(btn.getAttribute('data-type')));
+  });
+}
+
 function renderConfigFields(type, values = {}) {
   const container = document.getElementById('config-fields');
   const fields = CONFIG_FIELDS[type] || [];
@@ -66,16 +140,23 @@ function showForm(type, channel = null) {
   const section = document.getElementById('channel-form-section');
   const form = document.getElementById('channel-form');
   const title = document.getElementById('form-title');
+  const resolvedType = channel?.type || type;
+  const info = getTypeInfo(resolvedType);
 
   section.classList.remove('hidden');
   form.reset();
   form.id.value = channel?.id || '';
-  form.type.value = channel?.type || type;
+  form.type.value = resolvedType;
   form.name.value = channel?.name || '';
   form.enabled.checked = channel ? channel.enabled : true;
 
-  title.textContent = channel ? `编辑渠道 · ${TYPE_LABELS[channel.type]}` : `新建渠道 · ${TYPE_LABELS[type]}`;
-  renderConfigFields(channel?.type || type, channel?.config || {});
+  title.innerHTML = `
+    <span class="channel-form-title">
+      ${renderChannelIcon(resolvedType, 'sm')}
+      <span>${channel ? `编辑渠道 · ${info.label}` : `新建渠道 · ${info.label}`}</span>
+    </span>
+  `;
+  renderConfigFields(resolvedType, channel?.config || {});
 }
 
 function hideForm() {
@@ -88,6 +169,7 @@ async function fetchChannels() {
 }
 
 function renderChannelCard(channel) {
+  const info = getTypeInfo(channel.type);
   const badgeClass = TYPE_BADGE[channel.type] || 'chip--muted';
   const configSummary = Object.entries(channel.config)
     .map(([k, v]) => `${k}: ${v}`)
@@ -95,15 +177,19 @@ function renderChannelCard(channel) {
 
   return `
     <div class="list-item">
-      <div class="min-w-0 flex-1">
-        <div class="list-item__header">
-          <p class="list-item__title">${channel.name}</p>
-          <span class="chip ${badgeClass}">${TYPE_LABELS[channel.type]}</span>
-          <span class="chip ${channel.enabled ? 'chip--success' : 'chip--muted'}">
-            ${channel.enabled ? '已启用' : '已禁用'}
-          </span>
+      <div class="list-item__body">
+        ${renderChannelIcon(channel.type)}
+        <div class="list-item__content">
+          <div class="list-item__header">
+            <p class="list-item__title">${channel.name}</p>
+            <span class="chip ${badgeClass}">${info.label}</span>
+            <span class="chip ${channel.enabled ? 'chip--success' : 'chip--muted'}">
+              ${channel.enabled ? '已启用' : '已禁用'}
+            </span>
+          </div>
+          <p class="list-item__desc">${info.desc}</p>
+          <p class="list-item__meta list-item__meta--truncate">${configSummary}</p>
         </div>
-        <p class="list-item__meta truncate">${configSummary}</p>
       </div>
       <div class="list-item__actions">
         <button data-action="toggle" data-id="${channel.id}" class="btn btn-ghost btn-sm">
@@ -129,7 +215,7 @@ async function loadChannels() {
   if (!channels.length) {
     list.innerHTML = `
       <div class="empty-state glass-card">
-        <div class="empty-state__icon">🔔</div>
+        <div class="empty-state__icon"><i class="fas fa-bell-slash"></i></div>
         <p>尚未配置通知渠道。</p>
         <p class="form-hint">从左侧选择渠道类型开始添加。</p>
       </div>`;
@@ -237,9 +323,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (nav) setupNavAuth(nav);
   await requirePageAuth();
 
-  document.querySelectorAll('.type-btn').forEach((btn) => {
-    btn.addEventListener('click', () => showForm(btn.getAttribute('data-type')));
-  });
+  renderTypeButtons();
 
   document.getElementById('cancel-form')?.addEventListener('click', hideForm);
   document.getElementById('channel-form')?.addEventListener('submit', submitChannelForm);

@@ -106,6 +106,19 @@ const METRIC_ICONS = {
   ai_neurons: '🤖',
 };
 
+const SERVICE_ICONS = {
+  kv: '🔑',
+  d1: '🗄️',
+  r2: '☁️',
+};
+
+const GROUP_ICONS = {
+  '计算与运行时': '⚙️',
+  'Durable Objects': '💠',
+  '消息与数据平面': '📨',
+  '分析': '📈',
+};
+
 const OTHER_GROUPS = [
   {
     title: '计算与运行时',
@@ -294,14 +307,24 @@ function renderQuotaRow(key, metric) {
   `;
 }
 
+function renderServiceCardHead(group, metaHtml = '') {
+  const icon = SERVICE_ICONS[group.id] ?? '📊';
+  return `
+      <div class="service-card__head">
+        <div class="service-card__heading">
+          <span class="service-card__icon" aria-hidden="true">${icon}</span>
+          <span class="service-card__title">${group.title}</span>
+        </div>
+        ${metaHtml}
+      </div>`;
+}
+
 function renderServiceCard(group, quotas, serviceStatus) {
   const activation = serviceStatus?.[group.id];
   if (activation === 'not_activated') {
     return `
     <div class="service-card">
-      <div class="service-card__head">
-        <span class="service-card__title">${group.title}</span>
-      </div>
+      ${renderServiceCardHead(group)}
       <p class="service-card__inactive">未开通此服务</p>
     </div>`;
   }
@@ -315,10 +338,7 @@ function renderServiceCard(group, quotas, serviceStatus) {
   const metaHtml = meta ? `<span class="service-card__meta">${meta}</span>` : '';
   return `
     <div class="service-card">
-      <div class="service-card__head">
-        <span class="service-card__title">${group.title}</span>
-        ${metaHtml}
-      </div>
+      ${renderServiceCardHead(group, metaHtml)}
       ${rows}
     </div>
   `;
@@ -354,7 +374,8 @@ function renderAccountDetails(account) {
         .filter(Boolean)
         .join('');
       if (!rows) return '';
-      return `<div class="quota-group-block"><h4 class="quota-group-block__title">${g.title}</h4>${rows}</div>`;
+      const groupIcon = GROUP_ICONS[g.title] ?? '📊';
+      return `<div class="quota-group-block"><h4 class="quota-group-block__title"><span class="quota-group-block__icon" aria-hidden="true">${groupIcon}</span>${g.title}</h4>${rows}</div>`;
     })
     .filter(Boolean)
     .join('');
