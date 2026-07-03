@@ -1,4 +1,4 @@
-import { requirePageAuth, setupNavAuth, authFetch } from './auth.js';
+import { requirePageAuth, setupNavAuth, authFetch, parseJsonResponse } from './auth.js';
 import { startRateLimitCountdown } from './rate-limit.js';
 
 const API_BASE = window.location.origin;
@@ -280,7 +280,7 @@ async function sendTestAlert(options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(accountId ? { accountId } : {}),
     });
-    const data = await resp.json();
+    const data = await parseJsonResponse(resp);
 
     if (resp.status === 429) {
       rateLimited = true;
@@ -344,7 +344,7 @@ async function handleAction(btn) {
     let rateLimited = false;
     try {
       const resp = await authFetch(`${API_BASE}/api/channels/${id}/test`, { method: 'POST' });
-      const data = await resp.json();
+      const data = await parseJsonResponse(resp);
       if (resp.status === 429) {
         rateLimited = true;
         await startRateLimitCountdown({

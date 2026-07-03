@@ -614,6 +614,9 @@ const ALERT_TEST_COOLDOWN_PREFIX = 'alert-test:';
 
 const ALERT_TEST_COOLDOWN_SECONDS = 10;
 
+/** Cloudflare KV requires expirationTtl >= 60; rate limit window stays at 10s. */
+const ALERT_TEST_KV_TTL_SECONDS = 60;
+
 
 
 export async function checkAlertTestRateLimit(
@@ -658,7 +661,7 @@ export async function markAlertTestSent(kv: KVNamespace, key: string): Promise<v
 
   await kv.put(`${ALERT_TEST_COOLDOWN_PREFIX}${key}`, String(Date.now()), {
 
-    expirationTtl: ALERT_TEST_COOLDOWN_SECONDS,
+    expirationTtl: ALERT_TEST_KV_TTL_SECONDS,
 
   });
 

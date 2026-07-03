@@ -1,4 +1,4 @@
-import { setupNavAuth, authFetch, redirectToLogin } from './auth.js';
+import { setupNavAuth, authFetch, parseJsonResponse, redirectToLogin } from './auth.js';
 import { startRateLimitCountdown } from './rate-limit.js';
 
 const API_BASE = window.location.origin;
@@ -372,7 +372,7 @@ async function sendAdminTestAlert() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await resp.json();
+    const data = await parseJsonResponse(resp);
 
     if (resp.status === 429) {
       rateLimited = true;

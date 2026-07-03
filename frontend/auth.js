@@ -72,3 +72,22 @@ export async function authFetch(url, options = {}) {
   }
   return resp;
 }
+
+/** Parse JSON response; fall back to a friendly message for non-JSON error bodies. */
+export async function parseJsonResponse(resp) {
+  const contentType = resp.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return resp.json();
+  }
+
+  const text = await resp.text();
+  if (!resp.ok) {
+    return { error: resp.status >= 500 ? '服务器错误，请稍后重试' : text || '请求失败' };
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: '服务器返回了无效响应' };
+  }
+}

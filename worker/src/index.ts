@@ -433,80 +433,90 @@ function getAlertTestRateLimitKey(c: { req: { header: (name: string) => string |
 }
 
 app.post('/api/alerts/test', requireAuth, async (c) => {
-  const rateLimitKey = getAlertTestRateLimitKey(c);
-  const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
-  if (!rateLimit.allowed) {
-    return c.json(
-      {
-        error: '测试告警发送过于频繁，请稍后再试',
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      429,
-    );
-  }
-
-  let body: { accountId?: string } = {};
   try {
-    body = await c.req.json<{ accountId?: string }>();
-  } catch {
-    // empty body is fine
+    const rateLimitKey = getAlertTestRateLimitKey(c);
+    const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
+    if (!rateLimit.allowed) {
+      return c.json(
+        {
+          error: '测试告警发送过于频繁，请稍后再试',
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+        429,
+      );
+    }
+
+    let body: { accountId?: string } = {};
+    try {
+      body = await c.req.json<{ accountId?: string }>();
+    } catch {
+      // empty body is fine
+    }
+
+    let accountName: string | undefined;
+    if (body.accountId?.trim()) {
+      const accounts = await getAccounts(c.env.KV);
+      const account = accounts.find(
+        (a) => a.id === body.accountId || a.accountId === body.accountId,
+      );
+      if (account) accountName = account.name;
+    }
+
+    const channels = await getChannels(c.env.KV);
+    const enabledCount = channels.filter((ch) => ch.enabled).length;
+    const legacyUrl = c.env.WEBHOOK_URL?.trim();
+    if (enabledCount === 0 && !legacyUrl) {
+      return c.json({ error: '未配置已启用的通知渠道，请先在「通知渠道」页面添加并启用' }, 400);
+    }
+
+    const result = await sendTestAlerts(c.env, accountName ? { accountName } : undefined);
+    await markAlertTestSent(c.env.KV, rateLimitKey);
+
+    const successCount = result.channels.filter((ch) => ch.ok).length;
+    const failCount = result.channels.length - successCount;
+
+    return c.json({
+      ok: result.sent,
+      sent: result.sent,
+      accountName: accountName ?? null,
+      channels: result.channels,
+      message: result.sent
+        ? `测试告警已发送（${successCount}/${result.channels.length} 个渠道成功${failCount ? `，${failCount} 个失败` : ''}）`
+        : '所有通知渠道发送失败，请检查渠道配置',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '服务器错误';
+    return c.json({ error: message }, 500);
   }
-
-  let accountName: string | undefined;
-  if (body.accountId?.trim()) {
-    const accounts = await getAccounts(c.env.KV);
-    const account = accounts.find(
-      (a) => a.id === body.accountId || a.accountId === body.accountId,
-    );
-    if (account) accountName = account.name;
-  }
-
-  const channels = await getChannels(c.env.KV);
-  const enabledCount = channels.filter((ch) => ch.enabled).length;
-  const legacyUrl = c.env.WEBHOOK_URL?.trim();
-  if (enabledCount === 0 && !legacyUrl) {
-    return c.json({ error: '未配置已启用的通知渠道，请先在「通知渠道」页面添加并启用' }, 400);
-  }
-
-  const result = await sendTestAlerts(c.env, accountName ? { accountName } : undefined);
-  await markAlertTestSent(c.env.KV, rateLimitKey);
-
-  const successCount = result.channels.filter((ch) => ch.ok).length;
-  const failCount = result.channels.length - successCount;
-
-  return c.json({
-    ok: result.sent,
-    sent: result.sent,
-    accountName: accountName ?? null,
-    channels: result.channels,
-    message: result.sent
-      ? `测试告警已发送（${successCount}/${result.channels.length} 个渠道成功${failCount ? `，${failCount} 个失败` : ''}）`
-      : '所有通知渠道发送失败，请检查渠道配置',
-  });
 });
 
 app.post('/api/channels/:id/test', requireAuth, async (c) => {
-  const id = c.req.param('id');
-  if (!id) return c.json({ error: 'Channel id required' }, 400);
-  const channel = await getChannelById(c.env.KV, id);
-  if (!channel) return c.json({ error: 'Channel not found' }, 404);
+  try {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'Channel id required' }, 400);
+    const channel = await getChannelById(c.env.KV, id);
+    if (!channel) return c.json({ error: 'Channel not found' }, 404);
 
-  const rateLimitKey = `${getAlertTestRateLimitKey(c)}:channel:${id}`;
-  const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
-  if (!rateLimit.allowed) {
-    return c.json(
-      {
-        error: '测试发送过于频繁，请稍后再试',
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-      },
-      429,
-    );
+    const rateLimitKey = `${getAlertTestRateLimitKey(c)}:channel:${id}`;
+    const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
+    if (!rateLimit.allowed) {
+      return c.json(
+        {
+          error: '测试发送过于频繁，请稍后再试',
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+        429,
+      );
+    }
+
+    const result = await sendTestNotification(channel);
+    await markAlertTestSent(c.env.KV, rateLimitKey);
+    if (!result.ok) return c.json({ ok: false, error: result.error }, 502);
+    return c.json({ ok: true, message: '测试消息已发送' });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '服务器错误';
+    return c.json({ error: message }, 500);
   }
-
-  const result = await sendTestNotification(channel);
-  await markAlertTestSent(c.env.KV, rateLimitKey);
-  if (!result.ok) return c.json({ ok: false, error: result.error }, 502);
-  return c.json({ ok: true, message: '测试消息已发送' });
 });
 
 app.post('/cron/fetch', requireAuth, async (c) => {
