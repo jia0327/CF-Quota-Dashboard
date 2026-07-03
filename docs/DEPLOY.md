@@ -25,11 +25,8 @@
 1. 打开 [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens)
 2. **使用模板** → **Edit Cloudflare Workers**
 3. 令牌名称建议改为 `cf-quota-dashboard`
-4. **必须保持 Edit**（GitHub 部署上传 Worker 与静态资源需要）：
-   - Account → **Workers Scripts → Edit**
-   - Account → **Workers KV Storage → Edit**
-5. 其余权限改为 **Read**；**增加** Account → **D1 → Read**
-6. 创建令牌并复制 Token 值
+4. **增加** Account → **D1 → Read**
+5. 创建令牌并复制 Token 值
 
 - 一键部署：设为 `QUICK_DEPLOY_API_TOKEN`
 - GitHub Actions：设为 `CLOUDFLARE_API_TOKEN`
