@@ -42,24 +42,7 @@
 
     <section id="account-form-panel" class="glass-card account-form-panel hidden" aria-hidden="true">
       <h2 id="form-title" class="glass-card__title">添加账号</h2>
-      <details class="form-help-details">
-        <summary class="form-help-details__summary">参数获取说明</summary>
-        <div class="form-help-details__body form-hint space-y-2">
-          <p><strong>Account Name</strong>：自定义标签，任意命名，用于在仪表盘中区分多个账号。</p>
-          <p><strong>Account ID</strong>：登录 Cloudflare Dashboard → 进入任意站点「概览 / Overview」→ 右侧边栏查看 <strong>Account ID</strong>（32 位字符）；或打开 Account Home，从浏览器地址栏 URL 中获取（<code class="text-xs">/accounts/…</code>）。</p>
-          <p><strong>API Token (read-only)</strong>：Dashboard → <strong>My Profile（我的个人资料）</strong> → <strong>API Tokens</strong> → <strong>Create Token</strong> → <strong>Create Custom Token</strong>，为被监控账号创建<strong>只读</strong> Token。</p>
-          <p class="pl-3 border-l-2 border-[var(--input-border)]">
-            <span class="block font-medium">最低必需权限（缺一不可）：</span>
-            Account → Account Analytics → Read（Workers、D1 读/写/存储、KV、R2、Workflows 等 GraphQL 用量）<br />
-            Account → D1 → Read（REST 查询 D1 数据库个数）
-          </p>
-          <p class="pl-3 border-l-2 border-[var(--input-border)]">
-            <span class="block font-medium">建议一并勾选（按需）：</span>
-            Cloudflare Pages: Read · Workers Scripts: Read · Workers KV Storage: Read · Workers R2 Storage: Read · Queues: Read · Hyperdrive: Read · Vectorize: Read · Account Settings: Read（Verify 时显示账号名）
-          </p>
-        </div>
-      </details>
-      <form id="account-form" class="mt-4">
+      <form id="account-form">
         <div class="form-group">
           <label class="form-label">Account Name</label>
           <input name="name" required class="glass-input" placeholder="主账号" />

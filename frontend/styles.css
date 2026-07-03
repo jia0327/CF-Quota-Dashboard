@@ -612,54 +612,6 @@ a:hover {
   animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.form-help-details {
-  margin-bottom: 1rem;
-}
-
-.form-help-details__summary {
-  list-style: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 0.875rem;
-  background: var(--input-bg);
-  border: 1px solid var(--input-border);
-  border-radius: 0.625rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  transition: border-color 0.2s ease, background 0.2s ease;
-}
-
-.form-help-details__summary::-webkit-details-marker {
-  display: none;
-}
-
-.form-help-details__summary::before {
-  content: '▸';
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  transition: transform 0.2s ease;
-}
-
-.form-help-details[open] .form-help-details__summary::before {
-  transform: rotate(90deg);
-}
-
-.form-help-details__summary:hover {
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-.form-help-details__body {
-  margin-top: 0.75rem;
-  padding: 0.75rem 0.875rem;
-  border: 1px solid var(--input-border);
-  border-radius: 0.625rem;
-  background: var(--input-bg);
-}
-
 .section-title--sm {
   font-size: 0.875rem;
   font-weight: 600;
