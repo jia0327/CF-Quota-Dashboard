@@ -26,3 +26,5 @@ ACCOUNT_CHECK_INTERVAL_MINUTES = "20"
 MAX_EXTERNAL_SUBREQUESTS_PER_RUN = "50"
 # Optional public snapshot API token (defaults to HMAC of PASSWORD+USERNAME)
 # PUBLIC_API_TOKEN — use: wrangler secret put PUBLIC_API_TOKEN
+# Optional AES-256 KV field encryption key (64-char hex); falls back to PBKDF2(PASSWORD)
+# ENCRYPTION_KEY — use: wrangler secret put ENCRYPTION_KEY

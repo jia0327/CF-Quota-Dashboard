@@ -12,7 +12,7 @@
 
 | # | 步骤 | 说明 |
 |---|------|------|
-| 1 | 创建 KV 命名空间 | 绑定名必须为 `KV`；仓库内 `wrangler.toml` 使用占位符 `YOUR_KV_NAMESPACE_ID` |
+| 1 | 创建 KV 命名空间 | 绑定名必须为 `KV`；`worker/wrangler.toml` 使用占位符 `YOUR_KV_NAMESPACE_ID` |
 | 2 | 绑定 KV 到 Worker | Dashboard 或 `wrangler.toml` 中 `binding = "KV"` |
 | 3 | 设置 `PASSWORD` Secret | `wrangler secret put PASSWORD` 或 Dashboard 加密变量；**未设置 = Dev 模式** |
 | 4 | 配置 `[vars]`（可选） | `USERNAME`、`ALERT_THRESHOLD`、刷新间隔等已有默认值 |
@@ -273,13 +273,16 @@ npx wrangler secret put PASSWORD
 | `WEBHOOK_URL` | String | ⚪ 可选 | *(空)* | 旧版单 webhook；**仅当 KV 无通知渠道时**作为隐式企微渠道 |
 | `ACCOUNT_CHECK_INTERVAL_MINUTES` | String | ⚪ 可选 | `20` | 快照缓存 TTL 回退值（分钟） |
 | `MAX_EXTERNAL_SUBREQUESTS_PER_RUN` | String | ⚪ 可选 | `50` | 单次刷新最多对外 subrequest 数（Workers 单次调用上限 50） |
-| `PUBLIC_API_TOKEN` | Secret/Var | ⚪ 可选 | HMAC 派生 | `GET /api/public/snapshot?token=` 的鉴权 token |
+| `PUBLIC_API_TOKEN` | Secret/Var | ⚪ 可选 | HMAC 派生 | `GET /api/public/snapshot?token=` 的鉴权 token。**生产环境推荐显式设置**，与登录码分离 |
+| `ENCRYPTION_KEY` | Secret | ⚪ 可选 | PBKDF2(`PASSWORD`) | KV 中 `apiToken` 与渠道敏感字段的 AES-GCM 加密密钥（64 位 hex 或任意字符串经 SHA-256） |
 
 每个账号刷新约消耗 **10** 个外部 subrequest；默认 50 的预算通常可刷新约 **5** 个账号。响应中的 `refreshStats` 会显示实际消耗与跳过情况。
 
 **⚠️ 重要提示：**
 
 - 生产环境**必须**设置 `PASSWORD`，否则 Worker 处于 Dev 模式，所有写 API 对公网开放
+- **推荐**设置独立 `PUBLIC_API_TOKEN` 供外部集成，避免将登录码或 HMAC 派生 token 直接分享给第三方
+- **推荐**设置独立 `ENCRYPTION_KEY`（`openssl rand -hex 32`），避免 KV 加密密钥与登录码绑定
 - Secret 必须通过 `wrangler secret put` 或 Dashboard 加密变量设置，不能写在 `wrangler.toml` 的 `[vars]` 中
 
 ---
@@ -313,7 +316,7 @@ npx wrangler secret put PASSWORD
     "id": "acc-1",
     "name": "主账号",
     "accountId": "6d7***************************90",
-    "apiToken": "duN***********************************fs",
+    "apiToken": "enc:v1:Base64IvAndCiphertext...",
     "enabled": true,
     "alertRules": [
       { "metricKey": "workers_requests", "enabled": true, "thresholdPercent": 80 }
@@ -322,16 +325,42 @@ npx wrangler secret put PASSWORD
 ]
 ```
 
-**`QUOTA_SNAPSHOT`**（配额快照）：
+> **KV 字段加密**：当设置了 `PASSWORD` 或 `ENCRYPTION_KEY` 时，`apiToken` 与通知渠道敏感字段（`webhookUrl`、`botToken`、`chatId`、`customHeaders`）在写入 KV 前经 AES-GCM 加密，存储格式为 `enc:v1:<base64>`。API 响应仍返回掩码值，前端无感知。
+>
+> - **密钥优先级**：`ENCRYPTION_KEY` Secret > 从 `PASSWORD` PBKDF2 派生
+> - **`ENCRYPTION_KEY` 格式**：推荐 64 位十六进制（`openssl rand -hex 32`）；也可为任意字符串（经 SHA-256 哈希为 256 位密钥）
+> - **迁移**：旧版明文数据在读取时照常解密为明文供 Worker 使用；下次保存账号/渠道时自动重加密
+> - **Dev 模式**：未设置 `PASSWORD` 且无 `ENCRYPTION_KEY` 时不加密（仅本地开发）
+
+设置加密密钥：
+
+```bash
+npx wrangler secret put ENCRYPTION_KEY
+# 粘贴 openssl rand -hex 32 的输出
+```
+
+**`QUOTA_SNAPSHOT`**（配额快照，字段见 [README — API 文档](../README.md#-api-文档)）：
 
 ```json
 {
   "lastUpdated": "2026-07-03T12:00:00.000Z",
   "accounts": [
     {
-      "accountId": "acc-1",
-      "name": "主账号",
-      "metrics": { "workers_requests": { "used": 80000, "limit": 100000, "pct": 80, "available": true } }
+      "accountId": "6d7...90",
+      "accountName": "主账号",
+      "status": "ok",
+      "quotas": {
+        "workers_requests": {
+          "used": 80000,
+          "limit": 100000,
+          "pct": 80,
+          "unit": "requests",
+          "period": "daily",
+          "label": "Workers Requests",
+          "available": true
+        }
+      },
+      "lastCheckTime": "2026-07-03T12:00:00.000Z"
     }
   ]
 }

@@ -7,6 +7,7 @@ import {
 import {
   getAlertCooldown,
   getChannels,
+  kvStoreContext,
   saveAlertCooldown,
 } from './kv-store';
 import type {
@@ -221,7 +222,7 @@ function legacyWebhookChannel(webhookUrl: string): NotificationChannel {
 }
 
 async function resolveChannels(env: Env): Promise<NotificationChannel[]> {
-  const channels = await getChannels(env.KV);
+  const channels = await getChannels(env.KV, kvStoreContext(env));
 
   if (channels.length > 0) {
     return channels.filter((c) => c.enabled);
@@ -245,7 +246,7 @@ export async function sendQuotaAlert(
   const alerts = filterAlertsByCooldown(allAlerts, cooldown);
   if (!alerts.length) return false;
 
-  const channels = await getChannels(env.KV);
+  const channels = await getChannels(env.KV, kvStoreContext(env));
   const channelById = new Map(channels.map((c) => [c.id, c]));
   const configByAccountId = new Map(accountConfigs.map((a) => [a.accountId, a]));
 

@@ -140,6 +140,8 @@ export interface Env {
   USERNAME?: string;
   /** Optional public snapshot API token (defaults to HMAC of PASSWORD+USERNAME) */
   PUBLIC_API_TOKEN?: string;
+  /** Optional AES-256 key for KV field encryption (64-char hex); falls back to PBKDF2(PASSWORD) */
+  ENCRYPTION_KEY?: string;
   /** Skip account refresh if checked within this many minutes (default: 20) */
   ACCOUNT_CHECK_INTERVAL_MINUTES?: string;
   /** Max Cloudflare API subrequests per refresh run (default: 50, cap: 50) */

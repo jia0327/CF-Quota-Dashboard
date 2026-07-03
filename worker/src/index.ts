@@ -13,8 +13,8 @@ import type {
 } from './types';
 import { ALERT_SERVICE_GROUPS, normalizeAlertRules, validateAccountAlertConfig } from './account-alerts';
 import {
+  acquireAlertTestRateLimit,
   addChannel,
-  checkAlertTestRateLimit,
   deleteChannel,
   generateId,
   getAccounts,
@@ -22,7 +22,7 @@ import {
   getChannels,
   getDashboardConfig,
   getSnapshot,
-  markAlertTestSent,
+  kvStoreContext,
   maskAccount,
   maskChannel,
   reorderAccounts,
@@ -77,7 +77,7 @@ app.use('*', async (c, next) => {
   c.header('X-Frame-Options', 'DENY');
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
   c.header(
-    'Content-Security-Policy-Report-Only',
+    'Content-Security-Policy',
     "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:",
   );
 });
@@ -137,7 +137,7 @@ async function getSnapshotWithOptionalRefresh(
     return { ...snapshot!, stale: false, refreshing: false };
   }
 
-  const enabledAccounts = (await getAccounts(env.KV)).filter((a) => a.enabled);
+  const enabledAccounts = (await getAccounts(env.KV, kvStoreContext(env))).filter((a) => a.enabled);
   if (enabledAccounts.length === 0) {
     return { lastUpdated: snapshot?.lastUpdated ?? null, accounts: [], stale: true, refreshing: false };
   }
@@ -230,7 +230,7 @@ app.get('/api/public/snapshot', async (c) => {
   }
 
   const snapshot = await getSnapshotWithOptionalRefresh(c.env, c.executionCtx);
-  const accounts = await getAccounts(c.env.KV);
+  const accounts = await getAccounts(c.env.KV, kvStoreContext(c.env));
   if (snapshot.accounts?.length && accounts.length) {
     snapshot.accounts = sortSnapshotsByAccountOrder(snapshot.accounts, accounts);
   }
@@ -247,9 +247,10 @@ app.get('/api/public/token', requireAuth, async (c) => {
 
 app.get('/api/accounts', requireAuth, async (c) => {
   const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
+  const kvCtx = kvStoreContext(c.env);
   const [accounts, channels] = await Promise.all([
-    getAccounts(c.env.KV),
-    getChannels(c.env.KV),
+    getAccounts(c.env.KV, kvCtx),
+    getChannels(c.env.KV, kvCtx),
   ]);
   return c.json(accounts.map((a) => maskAccount(a, threshold, channels)));
 });
@@ -276,7 +277,8 @@ app.post('/api/accounts', requireAuth, async (c) => {
   }
 
   const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
-  const channels = await getChannels(c.env.KV);
+  const kvCtx = kvStoreContext(c.env);
+  const channels = await getChannels(c.env.KV, kvCtx);
   const alertValidation = validateAccountAlertConfig(
     body.alertRules,
     body.notificationChannelId,
@@ -288,7 +290,7 @@ app.post('/api/accounts', requireAuth, async (c) => {
   }
 
   const alertRules = normalizeAlertRules(body.alertRules, undefined, threshold);
-  const accounts = await getAccounts(c.env.KV);
+  const accounts = await getAccounts(c.env.KV, kvCtx);
   const account: AccountConfig = {
     id: generateId(),
     name: body.name.trim(),
@@ -299,7 +301,7 @@ app.post('/api/accounts', requireAuth, async (c) => {
     alertRules: alertRules.length ? alertRules : undefined,
   };
   accounts.push(account);
-  await saveAccounts(c.env.KV, accounts);
+  await saveAccounts(c.env.KV, accounts, kvCtx);
   scheduleQuotaRefresh(c.env, c.executionCtx);
   return c.json(maskAccount(account, threshold, channels), 201);
 });
@@ -323,7 +325,8 @@ app.put('/api/accounts/reorder', requireAuth, async (c) => {
     return c.json({ error: 'accountIds array is required' }, 400);
   }
 
-  const reordered = await reorderAccounts(c.env.KV, body.accountIds);
+  const kvCtx = kvStoreContext(c.env);
+  const reordered = await reorderAccounts(c.env.KV, body.accountIds, kvCtx);
   if (!reordered) {
     return c.json({ error: 'accountIds must include every configured account exactly once' }, 400);
   }
@@ -335,7 +338,7 @@ app.put('/api/accounts/reorder', requireAuth, async (c) => {
   }
 
   const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
-  const channels = await getChannels(c.env.KV);
+  const channels = await getChannels(c.env.KV, kvCtx);
   return c.json(reordered.map((a) => maskAccount(a, threshold, channels)));
 });
 
@@ -352,11 +355,12 @@ app.put('/api/accounts/:id', requireAuth, async (c) => {
   }>();
 
   const threshold = getAlertThreshold(c.env.ALERT_THRESHOLD);
-  const existingAccounts = await getAccounts(c.env.KV);
+  const kvCtx = kvStoreContext(c.env);
+  const existingAccounts = await getAccounts(c.env.KV, kvCtx);
   const existing = existingAccounts.find((a) => a.id === id);
   if (!existing) return c.json({ error: 'Account not found' }, 404);
 
-  const channels = await getChannels(c.env.KV);
+  const channels = await getChannels(c.env.KV, kvCtx);
   const alertFieldsTouched =
     body.alertRules !== undefined || body.notificationChannelId !== undefined;
 
@@ -389,7 +393,7 @@ app.put('/api/accounts/:id', requireAuth, async (c) => {
   if (body.alertRules !== undefined) updates.alertRules = body.alertRules;
   if (alertFieldsTouched) updates.notificationChannelId = notificationChannelId;
 
-  const updated = await updateAccount(c.env.KV, id, updates, threshold);
+  const updated = await updateAccount(c.env.KV, id, updates, threshold, kvCtx);
 
   if (!updated) return c.json({ error: 'Account not found' }, 404);
 
@@ -404,19 +408,20 @@ app.put('/api/accounts/:id', requireAuth, async (c) => {
 
 app.delete('/api/accounts/:id', requireAuth, async (c) => {
   const id = c.req.param('id');
-  const accounts = await getAccounts(c.env.KV);
+  const kvCtx = kvStoreContext(c.env);
+  const accounts = await getAccounts(c.env.KV, kvCtx);
   const next = accounts.filter((a) => a.id !== id);
   if (next.length === accounts.length) {
     return c.json({ error: 'Account not found' }, 404);
   }
-  await saveAccounts(c.env.KV, next);
+  await saveAccounts(c.env.KV, next, kvCtx);
   scheduleQuotaRefresh(c.env, c.executionCtx);
   return c.json({ ok: true });
 });
 
 app.get('/api/snapshot', async (c) => {
   const snapshot = await getSnapshotWithOptionalRefresh(c.env, c.executionCtx);
-  const accounts = await getAccounts(c.env.KV);
+  const accounts = await getAccounts(c.env.KV, kvStoreContext(c.env));
   if (snapshot.accounts?.length && accounts.length) {
     snapshot.accounts = sortSnapshotsByAccountOrder(snapshot.accounts, accounts);
   }
@@ -480,7 +485,7 @@ function validateChannelBody(body: {
 }
 
 app.get('/api/channels', requireAuth, async (c) => {
-  const channels = await getChannels(c.env.KV);
+  const channels = await getChannels(c.env.KV, kvStoreContext(c.env));
   return c.json(channels.map(maskChannel));
 });
 
@@ -503,7 +508,7 @@ app.post('/api/channels', requireAuth, async (c) => {
     config: body.config!,
   };
 
-  await addChannel(c.env.KV, channel);
+  await addChannel(c.env.KV, channel, kvStoreContext(c.env));
   return c.json(maskChannel(channel), 201);
 });
 
@@ -520,7 +525,7 @@ app.put('/api/channels/:id', requireAuth, async (c) => {
     name: body.name,
     enabled: body.enabled,
     config: body.config,
-  });
+  }, kvStoreContext(c.env));
 
   if (!updated) return c.json({ error: 'Channel not found' }, 404);
   return c.json(maskChannel(updated));
@@ -529,7 +534,7 @@ app.put('/api/channels/:id', requireAuth, async (c) => {
 app.delete('/api/channels/:id', requireAuth, async (c) => {
   const id = c.req.param('id');
   if (!id) return c.json({ error: 'Channel id required' }, 400);
-  const deleted = await deleteChannel(c.env.KV, id);
+  const deleted = await deleteChannel(c.env.KV, id, kvStoreContext(c.env));
   if (!deleted) return c.json({ error: 'Channel not found' }, 404);
   return c.json({ ok: true });
 });
@@ -537,7 +542,7 @@ app.delete('/api/channels/:id', requireAuth, async (c) => {
 app.patch('/api/channels/:id/toggle', requireAuth, async (c) => {
   const id = c.req.param('id');
   if (!id) return c.json({ error: 'Channel id required' }, 400);
-  const channel = await toggleChannel(c.env.KV, id);
+  const channel = await toggleChannel(c.env.KV, id, kvStoreContext(c.env));
   if (!channel) return c.json({ error: 'Channel not found' }, 404);
   return c.json(maskChannel(channel));
 });
@@ -552,7 +557,7 @@ function getAlertTestRateLimitKey(c: { req: { header: (name: string) => string |
 app.post('/api/alerts/test', requireAuth, async (c) => {
   try {
     const rateLimitKey = getAlertTestRateLimitKey(c);
-    const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
+    const rateLimit = await acquireAlertTestRateLimit(c.env.KV, rateLimitKey);
     if (!rateLimit.allowed) {
       return c.json(
         {
@@ -572,14 +577,14 @@ app.post('/api/alerts/test', requireAuth, async (c) => {
 
     let accountName: string | undefined;
     if (body.accountId?.trim()) {
-      const accounts = await getAccounts(c.env.KV);
+      const accounts = await getAccounts(c.env.KV, kvStoreContext(c.env));
       const account = accounts.find(
         (a) => a.id === body.accountId || a.accountId === body.accountId,
       );
       if (account) accountName = account.name;
     }
 
-    const channels = await getChannels(c.env.KV);
+    const channels = await getChannels(c.env.KV, kvStoreContext(c.env));
     const enabledCount = channels.filter((ch) => ch.enabled).length;
     const legacyUrl = c.env.WEBHOOK_URL?.trim();
     if (enabledCount === 0 && !legacyUrl) {
@@ -587,7 +592,6 @@ app.post('/api/alerts/test', requireAuth, async (c) => {
     }
 
     const result = await sendTestAlerts(c.env, accountName ? { accountName } : undefined);
-    await markAlertTestSent(c.env.KV, rateLimitKey);
 
     const successCount = result.channels.filter((ch) => ch.ok).length;
     const failCount = result.channels.length - successCount;
@@ -611,11 +615,11 @@ app.post('/api/channels/:id/test', requireAuth, async (c) => {
   try {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'Channel id required' }, 400);
-    const channel = await getChannelById(c.env.KV, id);
+    const channel = await getChannelById(c.env.KV, id, kvStoreContext(c.env));
     if (!channel) return c.json({ error: 'Channel not found' }, 404);
 
     const rateLimitKey = `${getAlertTestRateLimitKey(c)}:channel:${id}`;
-    const rateLimit = await checkAlertTestRateLimit(c.env.KV, rateLimitKey);
+    const rateLimit = await acquireAlertTestRateLimit(c.env.KV, rateLimitKey);
     if (!rateLimit.allowed) {
       return c.json(
         {
@@ -627,7 +631,6 @@ app.post('/api/channels/:id/test', requireAuth, async (c) => {
     }
 
     const result = await sendTestNotification(channel);
-    await markAlertTestSent(c.env.KV, rateLimitKey);
     if (!result.ok) return c.json({ ok: false, error: result.error }, 502);
     return c.json({ ok: true, message: '测试消息已发送' });
   } catch (err) {
@@ -642,7 +645,8 @@ app.post('/cron/fetch', requireAuth, async (c) => {
 });
 
 export async function runQuotaFetch(env: Env, options?: { force?: boolean }): Promise<QuotaFetchResult> {
-  const accounts = (await getAccounts(env.KV)).filter((a) => a.enabled);
+  const kvCtx = kvStoreContext(env);
+  const accounts = (await getAccounts(env.KV, kvCtx)).filter((a) => a.enabled);
   const previousSnapshot = await getSnapshot(env.KV);
   const limitsJson = env.FREE_TIER_LIMITS;
 
@@ -738,7 +742,7 @@ export async function runQuotaFetch(env: Env, options?: { force?: boolean }): Pr
 
   await saveSnapshot(env.KV, snapshot);
 
-  const allAccounts = await getAccounts(env.KV);
+  const allAccounts = await getAccounts(env.KV, kvCtx);
   const alerted = await sendQuotaAlert(env, accountSnapshots, allAccounts);
 
   return { ...snapshot, alerted };
