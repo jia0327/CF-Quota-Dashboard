@@ -1748,9 +1748,22 @@ select.glass-input option {
   pointer-events: none;
 }
 
-.accounts-sortable-list .list-item {
+.accounts-sortable-list .list-item,
+.list-item--sortable {
   margin-bottom: 0;
   cursor: default;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.list-item--sortable .list-item__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-item--sortable .list-item__drag-handle {
+  align-self: center;
 }
 
 .list-item__drag-handle {
@@ -2132,14 +2145,19 @@ select.glass-input option {
     padding-bottom: 6rem;
   }
 
-  .list-item {
+  .list-item:not(.list-item--sortable) {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .list-item__actions {
+  .list-item:not(.list-item--sortable) .list-item__actions {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .list-item--sortable .list-item__actions {
+    width: auto;
+    flex-wrap: nowrap;
   }
 
   .mini-cards {

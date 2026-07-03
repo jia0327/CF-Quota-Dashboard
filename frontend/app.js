@@ -1053,20 +1053,22 @@ function renderAdminAccountItem(account) {
   const alertSummary = summarizeAlertRules(account.alertRules);
 
   return `
-    <div class="list-item" data-id="${account.id}" draggable="false">
+    <div class="list-item list-item--sortable" data-id="${account.id}" draggable="false">
       <button type="button" class="list-item__drag-handle" aria-label="拖动排序" title="拖动排序">
         <span class="drag-dots" aria-hidden="true"></span>
       </button>
-      <div class="min-w-0 flex-1">
-        <div class="list-item__header">
-          <p class="list-item__title">${account.name}</p>
-          <span class="chip ${account.enabled ? 'chip--success' : 'chip--muted'}">
-            ${account.enabled ? '已启用' : '已禁用'}
-          </span>
+      <div class="list-item__body">
+        <div class="list-item__content">
+          <div class="list-item__header">
+            <p class="list-item__title">${account.name}</p>
+            <span class="chip ${account.enabled ? 'chip--success' : 'chip--muted'}">
+              ${account.enabled ? '已启用' : '已禁用'}
+            </span>
+          </div>
+          <p class="list-item__meta">${account.accountId}</p>
+          <p class="list-item__meta">Token: ${account.apiToken}</p>
+          <p class="list-item__meta">${alertSummary}</p>
         </div>
-        <p class="list-item__meta">${account.accountId}</p>
-        <p class="list-item__meta">Token: ${account.apiToken}</p>
-        <p class="list-item__meta">${alertSummary}</p>
       </div>
       <div class="list-item__actions">
         <button data-id="${account.id}" data-action="edit" class="edit-btn btn btn-ghost btn-sm">编辑</button>

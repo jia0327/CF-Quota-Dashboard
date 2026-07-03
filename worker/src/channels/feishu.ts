@@ -8,8 +8,20 @@ export async function sendFeishu(
   if (!webhookUrl) return { ok: false, error: 'webhookUrl is required' };
 
   const body = {
-    msg_type: 'text',
-    content: { text: message.content },
+    msg_type: 'interactive',
+    card: {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: message.title },
+        template: 'red',
+      },
+      elements: [
+        {
+          tag: 'markdown',
+          content: message.markdown,
+        },
+      ],
+    },
   };
 
   try {

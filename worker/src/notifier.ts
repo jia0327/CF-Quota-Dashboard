@@ -17,13 +17,44 @@ import type {
   Env,
   NotificationChannel,
   QuotaMetric,
+  QuotaPeriod,
   SendResult,
 } from './types';
 
+const PERIOD_ZH: Record<QuotaPeriod, string> = {
+  daily: '今日',
+  monthly: '本月',
+  total: '总计',
+};
+
 function formatUsed(metric: QuotaMetric): string {
   if (metric.unit === 'GB') return `${metric.used} GB`;
-  if (metric.unit === 'bytes') return `${metric.used} B`;
-  return String(metric.used);
+  if (metric.unit === 'bytes') return `${metric.used.toLocaleString()} B`;
+  return metric.used.toLocaleString();
+}
+
+function formatLimit(metric: QuotaMetric): string {
+  if (metric.unit === 'GB') return `${metric.limit} GB`;
+  if (metric.unit === 'bytes') return `${metric.limit.toLocaleString()} B`;
+  return metric.limit.toLocaleString();
+}
+
+function formatAlertTime(date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? '';
+
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 function isR2Inactive(account: AccountSnapshot): boolean {
@@ -66,51 +97,117 @@ export function collectAlerts(
   return alerts;
 }
 
-export function buildAlertContent(alerts: AlertItem[]): AlertMessage | null {
+export interface FormatAlertOptions {
+  isTest?: boolean;
+}
+
+export function formatAlertMessage(
+  alerts: AlertItem[],
+  options?: FormatAlertOptions,
+): AlertMessage | null {
   if (!alerts.length) return null;
 
-  const lines = alerts.slice(0, 20).map(({ account, metric, thresholdPercent }) => {
-    const used = formatUsed(metric);
-    return `- **${account}** · ${metric.label}: ${used} (${metric.pct}% ≥ ${thresholdPercent}% of ${metric.limit} ${metric.unit}/${metric.period})`;
-  });
-
-  const plainLines = alerts.slice(0, 20).map(({ account, metric, thresholdPercent }) => {
-    const used = formatUsed(metric);
-    return `- ${account} · ${metric.label}: ${used} (${metric.pct}% ≥ ${thresholdPercent}% of ${metric.limit} ${metric.unit}/${metric.period})`;
-  });
-
+  const isTest = options?.isTest ?? false;
+  const timeStr = formatAlertTime();
   const thresholds = [...new Set(alerts.map((a) => a.thresholdPercent))].sort((a, b) => a - b);
   const thresholdLabel =
     thresholds.length === 1
       ? `≥${thresholds[0]}%`
       : `≥${thresholds.join('%, ≥')}%`;
 
-  const title = `CF Quota Alert (${thresholdLabel})`;
-  const markdown = [
-    `## ${title}`,
-    '',
-    ...lines,
-    alerts.length > 20 ? `\n_...and ${alerts.length - 20} more_` : '',
-    '',
-    `_Updated: ${new Date().toISOString()}_`,
-  ].join('\n');
+  const title = isTest
+    ? `[测试] CF 配额告警 (${thresholdLabel})`
+    : `CF 配额告警 (${thresholdLabel})`;
 
-  const content = [
-    title,
-    '',
-    ...plainLines,
-    alerts.length > 20 ? `\n...and ${alerts.length - 20} more` : '',
-    '',
-    `Updated: ${new Date().toISOString()}`,
-  ].join('\n');
+  const byAccount = new Map<string, AlertItem[]>();
+  for (const alert of alerts) {
+    const list = byAccount.get(alert.account) ?? [];
+    list.push(alert);
+    byAccount.set(alert.account, list);
+  }
+
+  const accountNames = [...byAccount.keys()];
+  const singleAccount = accountNames.length === 1 ? accountNames[0] : null;
+
+  const mdLines: string[] = [`## ${title}`, ''];
+  const plainLines: string[] = [title, ''];
+
+  if (singleAccount) {
+    mdLines.push(`> 账号：${singleAccount}`);
+    plainLines.push(`账号：${singleAccount}`);
+  } else {
+    mdLines.push(`> 告警账号：${accountNames.length} 个`);
+    plainLines.push(`告警账号：${accountNames.length} 个`);
+  }
+  mdLines.push(`> 时间：${timeStr}`);
+  plainLines.push(`时间：${timeStr}`);
+  if (!isTest && alerts.length > 1) {
+    mdLines.push(`> 告警项：${alerts.length}`);
+    plainLines.push(`告警项：${alerts.length}`);
+  }
+  mdLines.push('');
+  plainLines.push('');
+
+  let shown = 0;
+  const maxShow = 20;
+  for (const [account, items] of byAccount) {
+    if (shown >= maxShow) break;
+
+    if (!singleAccount) {
+      mdLines.push(`### ${account}`, '');
+      plainLines.push(`【${account}】`, '');
+    }
+
+    for (const { metric, thresholdPercent } of items) {
+      if (shown >= maxShow) break;
+
+      const period = PERIOD_ZH[metric.period] || metric.period;
+      const usageLine = `用量：${formatUsed(metric)} / ${formatLimit(metric)} (${metric.pct}%) · ${period}`;
+      const thresholdLine = `阈值：≥ ${thresholdPercent}%`;
+
+      mdLines.push(`**${metric.label}**`);
+      mdLines.push(usageLine);
+      mdLines.push(thresholdLine, '');
+
+      plainLines.push(metric.label);
+      plainLines.push(usageLine);
+      plainLines.push(thresholdLine, '');
+
+      shown++;
+    }
+
+    if (!singleAccount && shown < maxShow && items.length > 0) {
+      mdLines.push('---', '');
+      plainLines.push('---', '');
+    }
+  }
+
+  if (alerts.length > maxShow) {
+    mdLines.push(`_…还有 ${alerts.length - maxShow} 项告警_`, '');
+    plainLines.push(`…还有 ${alerts.length - maxShow} 项告警`, '');
+  }
+
+  mdLines.push('---');
+  plainLines.push('---');
+  if (isTest) {
+    mdLines.push('此为测试消息，请忽略');
+    plainLines.push('此为测试消息，请忽略');
+  } else {
+    mdLines.push('CF Quota Dashboard');
+    plainLines.push('CF Quota Dashboard');
+  }
 
   return {
     title,
-    content,
-    markdown,
+    content: plainLines.join('\n'),
+    markdown: mdLines.join('\n'),
     alerts,
     threshold: thresholds[0],
   };
+}
+
+export function buildAlertContent(alerts: AlertItem[]): AlertMessage | null {
+  return formatAlertMessage(alerts);
 }
 
 function legacyWebhookChannel(webhookUrl: string): NotificationChannel {
@@ -174,8 +271,6 @@ export interface ChannelTestOutcome {
 
 export function buildTestMessage(options?: { accountName?: string }): AlertMessage {
   const accountName = options?.accountName ?? '示例账号';
-  const now = new Date().toISOString();
-  const threshold = 80;
   const metric: QuotaMetric = {
     used: 85000,
     limit: 100000,
@@ -190,24 +285,11 @@ export function buildTestMessage(options?: { accountName?: string }): AlertMessa
     account: accountName,
     accountId: 'test',
     metricKey: 'workers_requests',
-    thresholdPercent: threshold,
+    thresholdPercent: 80,
     metric,
   };
 
-  const used = formatUsed(metric);
-  const plainLine = `- ${accountName} · ${metric.label}: ${used} (${metric.pct}% ≥ ${threshold}% of ${metric.limit} ${metric.unit}/${metric.period})`;
-  const mdLine = `- **${accountName}** · ${metric.label}: ${used} (${metric.pct}% ≥ ${threshold}% of ${metric.limit} ${metric.unit}/${metric.period})`;
-
-  const title = '【测试告警】CF 配额监控测试消息';
-  const intro = '若收到此消息，说明通知通道配置正常。以下为模拟告警格式示例：';
-
-  return {
-    title,
-    content: [title, '', intro, '', plainLine, '', `发送时间: ${now}`, '', '— 此为测试消息，请忽略 —'].join('\n'),
-    markdown: [`## ${title}`, '', intro, '', mdLine, '', `_发送时间: ${now}_`, '', '_此为测试消息，请忽略_'].join('\n'),
-    alerts: [sampleAlert],
-    threshold,
-  };
+  return formatAlertMessage([sampleAlert], { isTest: true })!;
 }
 
 export async function sendTestNotification(
