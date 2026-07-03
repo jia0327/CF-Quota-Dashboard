@@ -917,18 +917,55 @@ async function loadDashboard() {
 
 let editingAccountId = null;
 
-function resetAccountForm() {
+function getAccountFormPanel() {
+  return document.getElementById('account-form-panel');
+}
+
+function getShowAddFormBtn() {
+  return document.getElementById('show-add-form-btn');
+}
+
+function openAccountFormPanel() {
+  const panel = getAccountFormPanel();
+  const addBtn = getShowAddFormBtn();
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.setAttribute('aria-hidden', 'false');
+  }
+  if (addBtn) {
+    addBtn.classList.add('hidden');
+    addBtn.setAttribute('aria-expanded', 'true');
+  }
+}
+
+function closeAccountFormPanel() {
+  const panel = getAccountFormPanel();
+  const addBtn = getShowAddFormBtn();
+  const msg = document.getElementById('form-message');
+  if (panel) {
+    panel.classList.add('hidden');
+    panel.setAttribute('aria-hidden', 'true');
+  }
+  if (addBtn) {
+    addBtn.classList.remove('hidden');
+    addBtn.setAttribute('aria-expanded', 'false');
+  }
+  if (msg) {
+    msg.textContent = '';
+    msg.className = 'form-message';
+  }
+}
+
+function clearAccountFormFields() {
   const form = document.getElementById('account-form');
   if (!form) return;
   form.reset();
   editingAccountId = null;
   const title = document.getElementById('form-title');
   const submitBtn = document.getElementById('submit-btn');
-  const cancelBtn = document.getElementById('cancel-edit-btn');
   const tokenInput = form.apiToken;
   if (title) title.textContent = '添加账号';
   if (submitBtn) submitBtn.textContent = '保存账号';
-  if (cancelBtn) cancelBtn.classList.add('hidden');
   if (tokenInput) {
     tokenInput.required = true;
     tokenInput.placeholder = 'Cloudflare API Token';
@@ -936,9 +973,24 @@ function resetAccountForm() {
   setAlertFormValues(null);
 }
 
+function resetAccountForm() {
+  clearAccountFormFields();
+  closeAccountFormPanel();
+}
+
+function openAddAccountForm() {
+  clearAccountFormFields();
+  openAccountFormPanel();
+  getAccountFormPanel()?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function startEditAccount(account) {
   const form = document.getElementById('account-form');
   if (!form) return;
+
+  clearAccountFormFields();
+  openAccountFormPanel();
+
   editingAccountId = account.id;
   form.name.value = account.name;
   form.accountId.value = account.accountId;
@@ -949,12 +1001,10 @@ function startEditAccount(account) {
 
   const title = document.getElementById('form-title');
   const submitBtn = document.getElementById('submit-btn');
-  const cancelBtn = document.getElementById('cancel-edit-btn');
   if (title) title.textContent = `编辑账号 · ${account.name}`;
   if (submitBtn) submitBtn.textContent = '更新账号';
-  if (cancelBtn) cancelBtn.classList.remove('hidden');
 
-  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  getAccountFormPanel()?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function verifyAccountForm() {
@@ -1304,12 +1354,7 @@ async function submitAccountForm(e) {
       throw new Error(err.error || '保存账号失败');
     }
 
-    const wasEdit = !!editingAccountId;
     resetAccountForm();
-    if (msg) {
-      msg.textContent = wasEdit ? '账号已更新。' : '账号添加成功。';
-      msg.className = 'form-message form-message--success';
-    }
     loadAdmin();
   } catch (err) {
     if (msg) {
@@ -1351,7 +1396,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const verifyBtn = document.getElementById('verify-btn');
     if (verifyBtn) verifyBtn.addEventListener('click', verifyAccountForm);
 
-    const cancelBtn = document.getElementById('cancel-edit-btn');
+    const showAddBtn = document.getElementById('show-add-form-btn');
+    if (showAddBtn) showAddBtn.addEventListener('click', openAddAccountForm);
+
+    const cancelBtn = document.getElementById('cancel-form-btn');
     if (cancelBtn) cancelBtn.addEventListener('click', resetAccountForm);
   }
 

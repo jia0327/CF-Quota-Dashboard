@@ -28,23 +28,37 @@
   </header>
 
   <main class="page-main page-main--wide space-y-8">
-    <section class="glass-card">
-      <h2 id="form-title" class="glass-card__title">添加账号</h2>
-      <div class="form-hint space-y-2 mb-4">
-        <p class="font-medium text-[var(--text-secondary)]">参数获取说明</p>
-        <p><strong>Account Name</strong>：自定义标签，任意命名，用于在仪表盘中区分多个账号。</p>
-        <p><strong>Account ID</strong>：登录 Cloudflare Dashboard → 进入任意站点「概览 / Overview」→ 右侧边栏查看 <strong>Account ID</strong>（32 位字符）；或打开 Account Home，从浏览器地址栏 URL 中获取（<code class="text-xs">/accounts/…</code>）。</p>
-        <p><strong>API Token (read-only)</strong>：Dashboard → <strong>My Profile（我的个人资料）</strong> → <strong>API Tokens</strong> → <strong>Create Token</strong> → <strong>Create Custom Token</strong>，为被监控账号创建<strong>只读</strong> Token。</p>
-        <p class="pl-3 border-l-2 border-[var(--input-border)]">
-          <span class="block font-medium">最低必需权限（缺一不可）：</span>
-          Account → Account Analytics → Read（Workers、D1 读/写/存储、KV、R2、Workflows 等 GraphQL 用量）<br />
-          Account → D1 → Read（REST 查询 D1 数据库个数）
-        </p>
-        <p class="pl-3 border-l-2 border-[var(--input-border)]">
-          <span class="block font-medium">建议一并勾选（按需）：</span>
-          Cloudflare Pages: Read · Workers Scripts: Read · Workers KV Storage: Read · Workers R2 Storage: Read · Queues: Read · Hyperdrive: Read · Vectorize: Read · Account Settings: Read（Verify 时显示账号名）
-        </p>
+    <section>
+      <div class="admin-section-header">
+        <h2 class="section-title admin-section-header__title">已配置账号</h2>
+        <button type="button" id="show-add-form-btn" class="btn-add-account" aria-expanded="false" aria-controls="account-form-panel">
+          <span class="btn-add-account__icon" aria-hidden="true">+</span>
+          添加账号
+        </button>
       </div>
+      <p class="form-hint mb-3">拖动左侧手柄可调整在仪表盘中的显示顺序。</p>
+      <div id="accounts-list" class="loading-state">加载中…</div>
+    </section>
+
+    <section id="account-form-panel" class="glass-card account-form-panel hidden" aria-hidden="true">
+      <h2 id="form-title" class="glass-card__title">添加账号</h2>
+      <details class="form-help-details">
+        <summary class="form-help-details__summary">参数获取说明</summary>
+        <div class="form-help-details__body form-hint space-y-2">
+          <p><strong>Account Name</strong>：自定义标签，任意命名，用于在仪表盘中区分多个账号。</p>
+          <p><strong>Account ID</strong>：登录 Cloudflare Dashboard → 进入任意站点「概览 / Overview」→ 右侧边栏查看 <strong>Account ID</strong>（32 位字符）；或打开 Account Home，从浏览器地址栏 URL 中获取（<code class="text-xs">/accounts/…</code>）。</p>
+          <p><strong>API Token (read-only)</strong>：Dashboard → <strong>My Profile（我的个人资料）</strong> → <strong>API Tokens</strong> → <strong>Create Token</strong> → <strong>Create Custom Token</strong>，为被监控账号创建<strong>只读</strong> Token。</p>
+          <p class="pl-3 border-l-2 border-[var(--input-border)]">
+            <span class="block font-medium">最低必需权限（缺一不可）：</span>
+            Account → Account Analytics → Read（Workers、D1 读/写/存储、KV、R2、Workflows 等 GraphQL 用量）<br />
+            Account → D1 → Read（REST 查询 D1 数据库个数）
+          </p>
+          <p class="pl-3 border-l-2 border-[var(--input-border)]">
+            <span class="block font-medium">建议一并勾选（按需）：</span>
+            Cloudflare Pages: Read · Workers Scripts: Read · Workers KV Storage: Read · Workers R2 Storage: Read · Queues: Read · Hyperdrive: Read · Vectorize: Read · Account Settings: Read（Verify 时显示账号名）
+          </p>
+        </div>
+      </details>
       <form id="account-form" class="mt-4">
         <div class="form-group">
           <label class="form-label">Account Name</label>
@@ -79,16 +93,10 @@
         <div class="form-actions">
           <button type="button" id="verify-btn" class="btn btn-secondary">验证凭据</button>
           <button type="submit" id="submit-btn" class="btn btn-primary">保存账号</button>
-          <button type="button" id="cancel-edit-btn" class="btn btn-ghost hidden">取消编辑</button>
+          <button type="button" id="cancel-form-btn" class="btn btn-ghost">取消</button>
         </div>
         <p id="form-message" class="form-message"></p>
       </form>
-    </section>
-
-    <section>
-      <h2 class="section-title">已配置账号</h2>
-      <p class="form-hint mb-3">拖动左侧手柄可调整在仪表盘中的显示顺序。</p>
-      <div id="accounts-list" class="loading-state">加载中…</div>
     </section>
   </main>
 
