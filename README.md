@@ -2,8 +2,6 @@
 
 <div align="center">
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cf-fork-div/CF-Quota-Dashboard)
-
 **基于 Cloudflare Workers + KV + Hono 的多账号免费额度监控面板**
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -115,22 +113,22 @@
 
 ## 🛠️ 部署指南
 
-**一键部署（推荐）：** 点击页首 [Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/?url=https://github.com/cf-fork-div/CF-Quota-Dashboard) 按钮。Cloudflare 会从**仓库根目录**读取 `wrangler.toml` 与 `package.json`，自动克隆并部署 Worker（含 `frontend/` 静态资源）。
+**Wrangler CLI（推荐）：**
 
 ```bash
 git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
 cd CF-Quota-Dashboard
 npm install
-# 创建 KV → 替换根目录 wrangler.toml 中的 YOUR_KV_NAMESPACE_ID
+# 确认 KV 命名空间（通常已有 CF-Quota-Dashboard）→ 替换 wrangler.toml 中的 YOUR_KV_NAMESPACE_ID
 npx wrangler secret put PASSWORD --config wrangler.toml
 npm run deploy
 ```
 
-生产环境需绑定 KV 命名空间（`KV`）并设置 `PASSWORD` Secret。主配置文件为仓库根目录 **`wrangler.toml`**；在 `worker/` 目录内单独部署时仍可使用 **`worker/wrangler.toml`**。
+生产环境需绑定 KV（Worker 变量名 **`KV`**，命名空间显示名通常为 **`CF-Quota-Dashboard`**）并设置 `PASSWORD` Secret。主配置文件为仓库根目录 **`wrangler.toml`**；在 `worker/` 目录内单独部署时仍可使用 **`worker/wrangler.toml`**。GitHub Actions 未设置 `KV_NAMESPACE_ID` 时会自动查找或创建标题为 **`CF-Quota-Dashboard`** 的命名空间；若使用其他名称，请在 Secrets 中填入其 ID。
 
-**Dashboard 一键部署报「无法获取存储库内容」？** 多为网络或 GitHub 授权问题，而非仓库缺文件。请确认使用公开仓库 [cf-fork-div/CF-Quota-Dashboard](https://github.com/cf-fork-div/CF-Quota-Dashboard)（非 `jia0327` fork）；中国大陆访问时 GitHub API 可能超时，可改用下方 CLI / GitHub Actions，或挂代理后重试。详见 [docs/DEPLOY.md#dashboard-一键部署故障排查](docs/DEPLOY.md#dashboard-一键部署故障排查)。
+**其他方式：** [GitHub Actions 自动部署](docs/DEPLOY.md#方法三github-actions-自动部署) · [Dashboard Connect Git](docs/DEPLOY.md#2-连接-github推荐)
 
-👉 **完整步骤、环境变量、GitHub Actions 与故障排查见 [docs/DEPLOY.md](docs/DEPLOY.md)**
+👉 **完整步骤、环境变量与故障排查见 [docs/DEPLOY.md](docs/DEPLOY.md)**
 
 ---
 

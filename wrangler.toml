@@ -6,6 +6,7 @@ main = "worker/src/index.ts"
 compatibility_date = "2026-01-15"
 
 # KV binding — variable name MUST be "KV" (uppercase). Do not rename.
+# Namespace display name (Dashboard title) is typically "CF-Quota-Dashboard"; binding vs title differ.
 # Repo uses placeholder id; replace locally or let GitHub Actions patch it from KV_NAMESPACE_ID.
 [[kv_namespaces]]
 binding = "KV"
