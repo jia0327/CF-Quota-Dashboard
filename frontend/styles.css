@@ -1741,6 +1741,7 @@ select.glass-input option {
   display: grid;
   grid-template-columns: 1fr;
   gap: 1rem;
+  align-items: stretch;
   list-style: none;
   padding: 0;
   margin: 0;
@@ -1749,6 +1750,12 @@ select.glass-input option {
 @media (min-width: 640px) {
   .accounts-sortable-list {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .accounts-sortable-list {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 
@@ -1763,12 +1770,14 @@ select.glass-input option {
   gap: 0.5rem;
   align-items: stretch;
   min-width: 0;
+  height: 100%;
 }
 
 .account-card__panel {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  height: 100%;
   backdrop-filter: blur(12px);
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -1814,20 +1823,25 @@ select.glass-input option {
 
 .account-card__row {
   display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.5rem;
   min-width: 0;
 }
 
 .account-card__label {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+  flex: 0 0 5.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .account-card__value {
+  flex: 1;
+  min-width: 0;
   font-size: 0.8125rem;
   color: var(--text-secondary);
   word-break: break-all;
@@ -1837,13 +1851,6 @@ select.glass-input option {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.75rem;
   color: var(--text-muted);
-}
-
-.account-card__alert {
-  margin: 0.25rem 0 0;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  line-height: 1.45;
 }
 
 .account-card__footer {

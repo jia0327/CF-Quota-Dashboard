@@ -15,11 +15,12 @@
     <div class="glass-nav__inner glass-nav__inner--wide">
       <div class="glass-nav__brand">
         <h1>账号管理</h1>
-        <p>配置监控账号与刷新策略</p>
+        <p>添加、编辑与管理监控账号</p>
       </div>
       <nav class="glass-nav__links">
         <a href="/" class="nav-link">仪表盘</a>
         <a href="/admin" class="nav-link nav-link--active">账号管理</a>
+        <a href="/admin/settings" class="nav-link">系统设置</a>
         <a href="/channels" class="nav-link">通知渠道</a>
         <span id="nav-auth" class="nav-auth"></span>
       </nav>
@@ -27,31 +28,6 @@
   </header>
 
   <main class="page-main page-main--wide space-y-8">
-    <section class="glass-card">
-      <h2 class="glass-card__title">刷新设置</h2>
-      <p class="form-hint">
-        快照缓存 TTL：访问仪表盘或调用 GET /api/snapshot 时，若超过此间隔则自动拉取 Cloudflare API。
-        无人访问时不刷新；添加/删除/启用/禁用账号后会立即触发一次刷新。
-      </p>
-      <form id="settings-form" class="mt-4">
-        <div class="form-group">
-          <label class="form-label">缓存有效期</label>
-          <select name="refreshIntervalMinutes" class="glass-input" required>
-            <option value="15">15 分钟</option>
-            <option value="20">20 分钟（默认）</option>
-            <option value="30">30 分钟</option>
-            <option value="60">1 小时</option>
-            <option value="120">2 小时</option>
-            <option value="360">6 小时</option>
-          </select>
-        </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">保存设置</button>
-        </div>
-        <p id="settings-message" class="form-message"></p>
-      </form>
-    </section>
-
     <section class="glass-card">
       <h2 id="form-title" class="glass-card__title">添加账号</h2>
       <div class="form-hint space-y-2 mb-4">
@@ -92,12 +68,6 @@
           <div id="alert-rules-grid" class="alert-rules-grid">
             <p class="form-hint">加载服务列表…</p>
           </div>
-          <div class="alert-test-row">
-            <button type="button" id="test-alert-btn" class="btn btn-secondary btn-sm">发送测试告警</button>
-            <p class="form-hint">向所有已启用通知渠道发送测试消息，验证告警推送是否正常。</p>
-          </div>
-          <p id="alert-test-message" class="form-message"></p>
-          <div id="alert-test-results" class="alert-test-results hidden"></div>
         </fieldset>
 
         <div class="form-actions">

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>系统设置 — CF 配额仪表盘</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="page-shell">
+  <header class="glass-nav">
+    <div class="glass-nav__inner glass-nav__inner--wide">
+      <div class="glass-nav__brand">
+        <h1>系统设置</h1>
+        <p>快照刷新策略与告警测试</p>
+      </div>
+      <nav class="glass-nav__links">
+        <a href="/" class="nav-link">仪表盘</a>
+        <a href="/admin" class="nav-link">账号管理</a>
+        <a href="/admin/settings" class="nav-link nav-link--active">系统设置</a>
+        <a href="/channels" class="nav-link">通知渠道</a>
+        <span id="nav-auth" class="nav-auth"></span>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page-main page-main--wide space-y-8">
+    <section class="glass-card">
+      <h2 class="glass-card__title">刷新设置</h2>
+      <p class="form-hint">
+        快照缓存 TTL：访问仪表盘或调用 GET /api/snapshot 时，若超过此间隔则自动拉取 Cloudflare API。
+        无人访问时不刷新；添加/删除/启用/禁用账号后会立即触发一次刷新。
+      </p>
+      <form id="settings-form" class="mt-4">
+        <div class="form-group">
+          <label class="form-label">缓存有效期</label>
+          <select name="refreshIntervalMinutes" class="glass-input" required>
+            <option value="15">15 分钟</option>
+            <option value="20">20 分钟（默认）</option>
+            <option value="30">30 分钟</option>
+            <option value="60">1 小时</option>
+            <option value="120">2 小时</option>
+            <option value="360">6 小时</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">保存设置</button>
+        </div>
+        <p id="settings-message" class="form-message"></p>
+      </form>
+    </section>
+
+    <section class="glass-card">
+      <h2 class="glass-card__title">告警测试</h2>
+      <p class="form-hint mb-4">
+        向所有已启用通知渠道发送测试消息，验证告警推送是否正常（不关联具体账号）。
+      </p>
+      <div class="alert-test-row">
+        <button type="button" id="test-alert-btn" class="btn btn-secondary btn-sm">发送测试告警</button>
+      </div>
+      <p id="alert-test-message" class="form-message"></p>
+      <div id="alert-test-results" class="alert-test-results hidden"></div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

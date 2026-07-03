@@ -243,20 +243,30 @@ function readAlertFormValues() {
   return rules;
 }
 
-function summarizeAlertRules(alertRules) {
-  if (!alertRules?.length) return '告警：未配置';
-  const enabled = alertRules.filter((r) => r.enabled);
-  if (!enabled.length) return '告警：未配置';
+function formatAlertSummary(alertRules) {
+  const enabledRules = (alertRules ?? []).filter((r) => r.enabled);
+  const alertsOn = enabledRules.length > 0;
 
   const groupTitles = [];
-  for (const group of alertServiceGroups) {
-    const state = getGroupStateFromRules(group, enabled);
-    if (state.enabled) {
-      groupTitles.push(`${group.title} ≥${state.thresholdPercent}%`);
+  if (alertServiceGroups.length) {
+    for (const group of alertServiceGroups) {
+      const state = getGroupStateFromRules(group, alertRules);
+      if (state.enabled) groupTitles.push(group.title);
     }
   }
-  if (!groupTitles.length) return `告警：${enabled.length} 项指标`;
-  return `告警：${groupTitles.slice(0, 4).join(' · ')}${groupTitles.length > 4 ? ' …' : ''}`;
+
+  return {
+    enabled: alertsOn ? '是' : '否',
+    projects: groupTitles.length ? groupTitles.join('/') : '—',
+  };
+}
+
+function truncateAccountId(accountId) {
+  if (!accountId) return '—';
+  if (accountId.length <= 16) return accountId;
+  const hidden = accountId.length - 10;
+  const maskLen = Math.min(hidden, 6);
+  return `${accountId.slice(0, 4)}${'x'.repeat(maskLen)}${accountId.slice(-6)}`;
 }
 
 const CHANNEL_TYPE_LABELS = {
@@ -346,7 +356,7 @@ async function sendAdminTestAlert() {
       if (err.status === 401) {
         messageEl.textContent = '需要登录，正在跳转…';
         messageEl.className = 'form-message form-message--error';
-        redirectToLogin('/admin');
+        redirectToLogin('/admin/settings');
         return;
       }
       messageEl.textContent = err.message || '发送失败';
@@ -1003,7 +1013,7 @@ async function loadDashboardSettings() {
     if (msg && err.status === 401) {
       msg.textContent = '需要登录才能修改设置，正在跳转…';
       msg.className = 'form-message form-message--error';
-      redirectToLogin('/admin');
+      redirectToLogin('/admin/settings');
     }
   }
 }
@@ -1036,7 +1046,7 @@ async function submitSettingsForm(e) {
       if (err.status === 401) {
         msg.textContent = '需要登录，正在跳转…';
         msg.className = 'form-message form-message--error';
-        redirectToLogin('/admin');
+        redirectToLogin('/admin/settings');
         return;
       }
       msg.textContent = err.message || '保存失败';
@@ -1059,7 +1069,7 @@ async function reorderAccounts(accountIds) {
 }
 
 function renderAdminAccountItem(account) {
-  const alertSummary = summarizeAlertRules(account.alertRules);
+  const { enabled: alertEnabled, projects: alertProjects } = formatAlertSummary(account.alertRules);
   const toggleBtnClass = account.enabled
     ? 'account-card__btn account-card__btn--disable'
     : 'account-card__btn account-card__btn--enable';
@@ -1080,14 +1090,21 @@ function renderAdminAccountItem(account) {
         </div>
         <div class="account-card__body">
           <div class="account-card__row">
-            <span class="account-card__label">Account ID</span>
-            <span class="account-card__value account-card__value--mono">${account.accountId}</span>
+            <span class="account-card__label">Account ID:</span>
+            <span class="account-card__value account-card__value--mono" title="${account.accountId}">${truncateAccountId(account.accountId)}</span>
           </div>
           <div class="account-card__row">
-            <span class="account-card__label">Token</span>
-            <span class="account-card__value account-card__value--mono">${account.apiToken}</span>
+            <span class="account-card__label">Token:</span>
+            <span class="account-card__value account-card__value--mono">${account.apiToken || '—'}</span>
           </div>
-          <p class="account-card__alert">${alertSummary}</p>
+          <div class="account-card__row">
+            <span class="account-card__label">告警开启:</span>
+            <span class="account-card__value">${alertEnabled}</span>
+          </div>
+          <div class="account-card__row">
+            <span class="account-card__label">告警项目:</span>
+            <span class="account-card__value">${alertProjects}</span>
+          </div>
         </div>
         <div class="account-card__footer">
           <button data-id="${account.id}" data-action="edit" class="edit-btn account-card__btn account-card__btn--edit">编辑</button>
@@ -1173,6 +1190,8 @@ function setupAccountDragDrop(list, getAccountIds, onReordered) {
 async function loadAdmin() {
   const list = document.getElementById('accounts-list');
   if (!list) return;
+
+  await loadAlertServiceGroups();
 
   const resp = await authFetch(`${API_BASE}/api/accounts`);
   const accounts = await resp.json();
@@ -1310,16 +1329,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderAlertRulesGrid();
     form.addEventListener('submit', submitAccountForm);
     loadAdmin();
-    loadDashboardSettings();
-
-    const settingsForm = document.getElementById('settings-form');
-    if (settingsForm) settingsForm.addEventListener('submit', submitSettingsForm);
 
     const verifyBtn = document.getElementById('verify-btn');
     if (verifyBtn) verifyBtn.addEventListener('click', verifyAccountForm);
 
     const cancelBtn = document.getElementById('cancel-edit-btn');
     if (cancelBtn) cancelBtn.addEventListener('click', resetAccountForm);
+  }
+
+  const settingsForm = document.getElementById('settings-form');
+  if (settingsForm) {
+    const { requirePageAuth } = await import('./auth.js');
+    await requirePageAuth();
+    settingsForm.addEventListener('submit', submitSettingsForm);
+    loadDashboardSettings();
 
     const testAlertBtn = document.getElementById('test-alert-btn');
     if (testAlertBtn) testAlertBtn.addEventListener('click', sendAdminTestAlert);

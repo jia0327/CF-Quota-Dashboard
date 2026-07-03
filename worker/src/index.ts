@@ -621,6 +621,7 @@ app.get('*', async (c) => {
   const url = new URL(c.req.url);
   let path = url.pathname;
   if (path === '/admin') path = '/admin.html';
+  if (path === '/admin/settings') path = '/admin/settings.html';
   if (path === '/channels') path = '/channels.html';
   if (path === '/login') path = '/login.html';
   if (path === '/') path = '/index.html';
