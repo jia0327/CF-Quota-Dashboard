@@ -1,0 +1,2 @@
+# Copy to worker/.dev.vars for local dev (never commit real values).
+PASSWORD=your-local-dev-password
