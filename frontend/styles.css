@@ -649,7 +649,8 @@ body.account-modal-open {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 32rem;
+  min-width: min(100%, 32.5rem);
+  max-width: 32.5rem;
   max-height: min(92vh, 720px);
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -747,6 +748,7 @@ body.account-modal-open {
 
 .account-modal__body {
   flex: 1;
+  overflow-x: visible;
   overflow-y: auto;
   padding: 1rem 1.25rem;
   min-height: 0;
@@ -828,8 +830,6 @@ body.account-modal-open {
 }
 
 .alert-rules-grid--modal {
-  display: flex;
-  flex-direction: column;
   gap: 0;
   border: 1px solid var(--input-border);
   border-radius: 0.625rem;
@@ -992,6 +992,7 @@ body.account-modal-open {
   }
 
   .account-modal {
+    min-width: 0;
     max-width: none;
     max-height: none;
     height: 100%;
@@ -1141,6 +1142,30 @@ select.glass-input option {
   .alert-rules-grid {
     grid-template-columns: repeat(3, 1fr);
   }
+}
+
+/* Account modal: single-column list so name + threshold + checkbox stay visible */
+.alert-rules-grid.alert-rules-grid--modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  grid-template-columns: unset;
+}
+
+.alert-rules-grid.alert-rules-grid--modal .alert-toggle-row {
+  min-width: 0;
+}
+
+.alert-rules-grid.alert-rules-grid--modal .alert-toggle-row__name {
+  flex: 1 1 auto;
+  min-width: 4.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alert-rules-grid.alert-rules-grid--modal .alert-toggle-row__controls {
+  flex-shrink: 0;
 }
 
 .alert-service-row {
