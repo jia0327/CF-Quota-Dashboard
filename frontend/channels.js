@@ -1,4 +1,5 @@
 import { requirePageAuth, setupNavAuth, authFetch } from './auth.js';
+import { startRateLimitCountdown } from './rate-limit.js';
 
 const API_BASE = window.location.origin;
 
@@ -272,6 +273,7 @@ async function sendTestAlert(options = {}) {
     buttonEl.textContent = '发送中…';
   }
 
+  let rateLimited = false;
   try {
     const resp = await authFetch(`${API_BASE}/api/alerts/test`, {
       method: 'POST',
@@ -281,7 +283,14 @@ async function sendTestAlert(options = {}) {
     const data = await resp.json();
 
     if (resp.status === 429) {
-      throw new Error(data.error || `请 ${data.retryAfterSeconds ?? 60} 秒后再试`);
+      rateLimited = true;
+      await startRateLimitCountdown({
+        buttonEl,
+        messageEl,
+        retryAfterSeconds: data.retryAfterSeconds,
+        buttonLabel: '发送测试告警',
+      });
+      return;
     }
     if (!resp.ok) throw new Error(data.error || '发送失败');
 
@@ -296,7 +305,7 @@ async function sendTestAlert(options = {}) {
       messageEl.className = 'form-message form-message--error';
     }
   } finally {
-    if (buttonEl) {
+    if (buttonEl && !rateLimited) {
       buttonEl.disabled = false;
       buttonEl.textContent = buttonEl.dataset.originalText || '发送测试告警';
     }
@@ -330,20 +339,30 @@ async function handleAction(btn) {
 
   if (action === 'test') {
     btn.disabled = true;
+    btn.dataset.originalText = btn.dataset.originalText || btn.textContent;
     btn.textContent = '发送中…';
+    let rateLimited = false;
     try {
       const resp = await authFetch(`${API_BASE}/api/channels/${id}/test`, { method: 'POST' });
       const data = await resp.json();
       if (resp.status === 429) {
-        throw new Error(data.error || `请 ${data.retryAfterSeconds ?? 60} 秒后再试`);
+        rateLimited = true;
+        await startRateLimitCountdown({
+          buttonEl: btn,
+          retryAfterSeconds: data.retryAfterSeconds,
+          buttonLabel: '测试',
+        });
+        return;
       }
       if (!resp.ok) throw new Error(data.error || '测试失败');
       alert(data.message || '测试消息已发送');
     } catch (err) {
       alert(`测试失败: ${err.message}`);
     } finally {
-      btn.disabled = false;
-      btn.textContent = '测试';
+      if (!rateLimited) {
+        btn.disabled = false;
+        btn.textContent = btn.dataset.originalText || '测试';
+      }
     }
   }
 }

@@ -1,4 +1,5 @@
 import { setupNavAuth, authFetch, redirectToLogin } from './auth.js';
+import { startRateLimitCountdown } from './rate-limit.js';
 
 const API_BASE = window.location.origin;
 
@@ -313,6 +314,7 @@ async function sendAdminTestAlert() {
     buttonEl.textContent = '发送中…';
   }
 
+  let rateLimited = false;
   try {
     const payload = editingAccountId ? { accountId: editingAccountId } : {};
     const resp = await authFetch(`${API_BASE}/api/alerts/test`, {
@@ -323,7 +325,14 @@ async function sendAdminTestAlert() {
     const data = await resp.json();
 
     if (resp.status === 429) {
-      throw new Error(data.error || `请 ${data.retryAfterSeconds ?? 60} 秒后再试`);
+      rateLimited = true;
+      await startRateLimitCountdown({
+        buttonEl,
+        messageEl,
+        retryAfterSeconds: data.retryAfterSeconds,
+        buttonLabel: '发送测试告警',
+      });
+      return;
     }
     if (!resp.ok) throw new Error(data.error || '发送失败');
 
@@ -344,7 +353,7 @@ async function sendAdminTestAlert() {
       messageEl.className = 'form-message form-message--error';
     }
   } finally {
-    if (buttonEl) {
+    if (buttonEl && !rateLimited) {
       buttonEl.disabled = false;
       buttonEl.textContent = buttonEl.dataset.originalText || '发送测试告警';
     }

@@ -268,7 +268,7 @@ curl.exe -X POST "https://your-worker.workers.dev/cron/fetch" -H "Cookie: cfqd_s
 | DELETE | `/api/channels/:id` | 需登录† | 删除渠道 |
 | PATCH | `/api/channels/:id/toggle` | 需登录† | 启用/禁用切换 |
 | POST | `/api/channels/:id/test` | 需登录† | 向单个渠道发送测试消息 |
-| POST | `/api/alerts/test` | 需登录† | 向所有已启用渠道发送测试告警；可选 body `{ "accountId": "..." }` 附带账号名；429 限频 1 次/分钟 |
+| POST | `/api/alerts/test` | 需登录† | 向所有已启用渠道发送测试告警；可选 body `{ "accountId": "..." }` 附带账号名；429 限频 1 次/10 秒（按会话） |
 | POST | `/cron/fetch` | 需登录† | 强制手动刷新；响应含 `refreshStats` |
 
 \* 页面级：`authEnabled && !authenticated` 时前端重定向 `/login`。  

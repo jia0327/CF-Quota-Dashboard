@@ -612,7 +612,7 @@ export async function saveAlertCooldown(
 
 const ALERT_TEST_COOLDOWN_PREFIX = 'alert-test:';
 
-const ALERT_TEST_COOLDOWN_SECONDS = 60;
+const ALERT_TEST_COOLDOWN_SECONDS = 10;
 
 
 
