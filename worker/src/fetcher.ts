@@ -8,19 +8,25 @@ const REST_BASE = 'https://api.cloudflare.com/client/v4';
 /** Estimated external subrequests per account (GraphQL batches + REST). */
 export const SUBREQUESTS_PER_ACCOUNT = 5;
 
-function getUtcDayRange() {
-  const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59));
-  return { start: start.toISOString(), end: end.toISOString() };
+function formatUtcDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
 }
 
-function getUtcMonthRange() {
+function getUtcRanges() {
   const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+  const dayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59));
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
   const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0));
-  const end = new Date(nextMonth.getTime() - 1000);
-  return { start: start.toISOString(), end: end.toISOString() };
+  const monthEnd = new Date(nextMonth.getTime() - 1000);
+  const today = formatUtcDate(now);
+
+  return {
+    day: { start: dayStart.toISOString(), end: dayEnd.toISOString() },
+    month: { start: monthStart.toISOString(), end: monthEnd.toISOString() },
+    dayDate: { start: formatUtcDate(dayStart), end: today },
+    monthDate: { start: formatUtcDate(monthStart), end: today },
+  };
 }
 
 async function graphqlRequest<T>(
@@ -105,8 +111,8 @@ interface ViewerAccount {
     sum?: { duration?: number; rowsRead?: number; rowsWritten?: number };
   }>;
   durableObjectsSqlStorageGroups?: Array<{ max?: { storedBytes?: number } }>;
-  vectorizeQueriesAdaptiveGroups?: Array<{ sum?: { queriedDimensions?: number } }>;
-  vectorizeStorageAdaptiveGroups?: Array<{ max?: { storedDimensions?: number } }>;
+  vectorizeV2QueriesAdaptiveGroups?: Array<{ count?: number; sum?: { queriedDimensions?: number; billableQueriedDimensions?: number } }>;
+  vectorizeV2StorageAdaptiveGroups?: Array<{ max?: { storedDimensions?: number; vectorDimensions?: number } }>;
   pagesFunctionsInvocationsAdaptiveGroups?: Array<{ sum?: { requests?: number } }>;
 }
 
@@ -256,33 +262,30 @@ async function fetchD1Metrics(
   };
 }
 
-async function fetchKvMetrics(
+async function fetchKvOperations(
   token: string,
   accountId: string,
-  day: { start: string; end: string },
+  dayDate: { start: string; end: string },
 ): Promise<
-  | { ok: true; kvReads: number; kvWrites: number; kvDeletes: number; kvLists: number; kvStorageBytes: number }
+  | { ok: true; kvReads: number; kvWrites: number; kvDeletes: number; kvLists: number }
   | { ok: false; error: string }
 > {
-  const kvQuery = `query KvMetrics($accountTag: String!, $dayStart: DateTime!, $dayEnd: DateTime!) {
+  const kvOpsQuery = `query KvOps($accountTag: String!, $dayStart: Date!, $dateEnd: Date!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
-        kvOperationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+        kvOperationsAdaptiveGroups(limit: 10000, filter: { date_geq: $dayStart, date_leq: $dateEnd }) {
           dimensions { actionType }
           sum { requests }
-        }
-        kvStorageAdaptiveGroups(limit: 10000, filter: { date_geq: $dayStart, date_leq: $dayEnd }) {
-          max { byteCount }
         }
       }
     }
   }`;
 
-  const result = await safeQuery('kv', () =>
-    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, kvQuery, {
+  const result = await safeQuery('kv-ops', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, kvOpsQuery, {
       accountTag: accountId,
-      dayStart: day.start,
-      dayEnd: day.end,
+      dayStart: dayDate.start,
+      dateEnd: dayDate.end,
     }),
   );
 
@@ -295,20 +298,90 @@ async function fetchKvMetrics(
   let kvLists = 0;
   for (const g of acc.kvOperationsAdaptiveGroups ?? []) {
     const n = g.sum?.requests ?? 0;
-    const action = g.dimensions?.actionType ?? '';
-    if (action === 'read') kvReads += n;
-    else if (action === 'write') kvWrites += n;
-    else if (action === 'delete') kvDeletes += n;
-    else if (action === 'list') kvLists += n;
+    const action = (g.dimensions?.actionType ?? '').toLowerCase();
+    if (action.includes('read')) kvReads += n;
+    else if (action.includes('write')) kvWrites += n;
+    else if (action.includes('delete')) kvDeletes += n;
+    else if (action.includes('list')) kvLists += n;
+  }
+
+  return { ok: true, kvReads, kvWrites, kvDeletes, kvLists };
+}
+
+async function fetchKvStorage(
+  token: string,
+  accountId: string,
+  monthDate: { start: string; end: string },
+): Promise<{ ok: true; kvStorageBytes: number } | { ok: false; error: string }> {
+  const kvStorageQuery = `query KvStorage($accountTag: String!, $storageStart: Date!, $dateEnd: Date!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        kvStorageAdaptiveGroups(
+          limit: 10000,
+          filter: { date_geq: $storageStart, date_leq: $dateEnd },
+          orderBy: [date_DESC]
+        ) {
+          max { byteCount }
+          dimensions { date namespaceId }
+        }
+      }
+    }
+  }`;
+
+  const result = await safeQuery('kv-storage', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, kvStorageQuery, {
+      accountTag: accountId,
+      storageStart: monthDate.start,
+      dateEnd: monthDate.end,
+    }),
+  );
+
+  if (!result.ok) return result;
+
+  const acc = getAccount(result.data);
+  const latestByNamespace = new Map<string, { bytes: number; date: string }>();
+  for (const g of acc.kvStorageAdaptiveGroups ?? []) {
+    const ns = (g as { dimensions?: { namespaceId?: string; date?: string } }).dimensions?.namespaceId ?? '';
+    const date = (g as { dimensions?: { namespaceId?: string; date?: string } }).dimensions?.date ?? '';
+    const bytes = g.max?.byteCount ?? 0;
+    const prev = latestByNamespace.get(ns);
+    if (!prev || date > prev.date) {
+      latestByNamespace.set(ns, { bytes, date });
+    }
+  }
+
+  const kvStorageBytes = [...latestByNamespace.values()].reduce((t, v) => t + v.bytes, 0);
+  return { ok: true, kvStorageBytes };
+}
+
+async function fetchKvMetrics(
+  token: string,
+  accountId: string,
+  dayDate: { start: string; end: string },
+  monthDate: { start: string; end: string },
+): Promise<
+  | { ok: true; kvReads: number; kvWrites: number; kvDeletes: number; kvLists: number; kvStorageBytes: number; errors: string[] }
+  | { ok: false; error: string }
+> {
+  const opsResult = await fetchKvOperations(token, accountId, dayDate);
+  const storageResult = await fetchKvStorage(token, accountId, monthDate);
+  const errors: string[] = [];
+
+  if (!opsResult.ok) errors.push(opsResult.error);
+  if (!storageResult.ok) errors.push(storageResult.error);
+
+  if (!opsResult.ok && !storageResult.ok) {
+    return { ok: false, error: errors.join('; ') };
   }
 
   return {
     ok: true,
-    kvReads,
-    kvWrites,
-    kvDeletes,
-    kvLists,
-    kvStorageBytes: sumGroups(acc.kvStorageAdaptiveGroups, (g) => g.max?.byteCount),
+    kvReads: opsResult.ok ? opsResult.kvReads : 0,
+    kvWrites: opsResult.ok ? opsResult.kvWrites : 0,
+    kvDeletes: opsResult.ok ? opsResult.kvDeletes : 0,
+    kvLists: opsResult.ok ? opsResult.kvLists : 0,
+    kvStorageBytes: storageResult.ok ? storageResult.kvStorageBytes : 0,
+    errors,
   };
 }
 
@@ -369,13 +442,17 @@ async function fetchVectorizeMetrics(
   | { ok: true; vectorizeQueried: number; vectorizeStored: number }
   | { ok: false; error: string }
 > {
-  const vectorizeQuery = `query Vectorize($accountTag: String!, $monthStart: DateTime!, $monthEnd: DateTime!) {
+  const vectorizeQuery = `query Vectorize($accountTag: String!, $monthStart: Time!, $monthEnd: Time!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
-        vectorizeQueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
-          sum { queriedDimensions }
+        vectorizeV2QueriesAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+          sum { billableQueriedDimensions }
         }
-        vectorizeStorageAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+        vectorizeV2StorageAdaptiveGroups(
+          limit: 10000,
+          filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd },
+          orderBy: [datetime_DESC]
+        ) {
           max { storedDimensions }
         }
       }
@@ -395,8 +472,8 @@ async function fetchVectorizeMetrics(
   const acc = getAccount(result.data);
   return {
     ok: true,
-    vectorizeQueried: sumGroups(acc.vectorizeQueriesAdaptiveGroups, (g) => g.sum?.queriedDimensions),
-    vectorizeStored: sumGroups(acc.vectorizeStorageAdaptiveGroups, (g) => g.max?.storedDimensions),
+    vectorizeQueried: sumGroups(acc.vectorizeV2QueriesAdaptiveGroups, (g) => g.sum?.billableQueriedDimensions),
+    vectorizeStored: sumGroups(acc.vectorizeV2StorageAdaptiveGroups, (g) => g.max?.storedDimensions),
   };
 }
 
@@ -418,22 +495,30 @@ async function fetchPagesBuilds(
   const endTime = new Date(monthEnd).getTime();
   const projects: PagesProject[] = [];
 
-  for (let page = 1; page <= 100; page++) {
+  const firstPage = await restRequestRaw<PagesProject[]>(
+    token,
+    `/accounts/${accountId}/pages/projects`,
+  );
+  projects.push(...(firstPage.result ?? []));
+
+  const totalPages = firstPage.result_info?.total_pages ?? 1;
+  for (let page = 2; page <= totalPages && page <= 100; page++) {
     const body = await restRequestRaw<PagesProject[]>(
       token,
-      `/accounts/${accountId}/pages/projects?page=${page}&per_page=25`,
+      `/accounts/${accountId}/pages/projects?page=${page}`,
     );
     projects.push(...(body.result ?? []));
-    if (!body.result_info || page >= (body.result_info.total_pages ?? 1)) break;
   }
 
   let totalBuilds = 0;
   for (const project of projects) {
-    for (let page = 1; page <= 200; page++) {
-      const body = await restRequestRaw<PagesDeployment[]>(
-        token,
-        `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments?page=${page}&per_page=25`,
-      );
+    let page = 1;
+    while (page <= 200) {
+      const path =
+        page === 1
+          ? `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments`
+          : `/accounts/${accountId}/pages/projects/${encodeURIComponent(project.name)}/deployments?page=${page}`;
+      const body = await restRequestRaw<PagesDeployment[]>(token, path);
       const list = body.result ?? [];
       totalBuilds += list.filter((d) => {
         const created = new Date(d.created_on).getTime();
@@ -441,7 +526,9 @@ async function fetchPagesBuilds(
       }).length;
 
       const oldest = list.length ? new Date(list[list.length - 1].created_on).getTime() : null;
-      if (!list.length || list.length < 25 || (oldest && oldest < startTime)) break;
+      const totalDeploymentPages = body.result_info?.total_pages ?? 1;
+      if (!list.length || page >= totalDeploymentPages || (oldest && oldest < startTime)) break;
+      page += 1;
     }
   }
   return totalBuilds;
@@ -452,26 +539,29 @@ async function fetchAllMetrics(
   accountId: string,
   limits: FreeTierLimitsConfig,
 ): Promise<{ quotas: QuotasMap; partialErrors: string[] }> {
-  const day = getUtcDayRange();
-  const month = getUtcMonthRange();
+  const ranges = getUtcRanges();
   const partialErrors: string[] = [];
 
-  const { acc } = await fetchCoreMetrics(token, accountId, day, month);
+  const { acc } = await fetchCoreMetrics(token, accountId, ranges.day, ranges.month);
 
-  const d1Result = await fetchD1Metrics(token, accountId, day, month);
-  const kvResult = await fetchKvMetrics(token, accountId, day);
-  const r2Result = await fetchR2Metrics(token, accountId, month);
-  const vectorizeResult = await fetchVectorizeMetrics(token, accountId, month);
+  const d1Result = await fetchD1Metrics(token, accountId, ranges.day, ranges.month);
+  const kvResult = await fetchKvMetrics(token, accountId, ranges.dayDate, ranges.monthDate);
+  const r2Result = await fetchR2Metrics(token, accountId, ranges.month);
+  const vectorizeResult = await fetchVectorizeMetrics(token, accountId, ranges.month);
 
   const pagesResult = await safeQuery('pages', () =>
-    fetchPagesBuilds(token, accountId, month.start, month.end),
+    fetchPagesBuilds(token, accountId, ranges.month.start, ranges.month.end),
   );
 
   if (!d1Result.ok) partialErrors.push(d1Result.error);
   if (!kvResult.ok) partialErrors.push(kvResult.error);
+  else if (kvResult.errors.length) partialErrors.push(...kvResult.errors);
   if (!r2Result.ok) partialErrors.push(r2Result.error);
   if (!vectorizeResult.ok) partialErrors.push(vectorizeResult.error);
   if (!pagesResult.ok) partialErrors.push(pagesResult.error);
+
+  const kvOpsOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-ops'));
+  const kvStorageOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-storage'));
 
   const workersRequests = acc.workersInvocationsAdaptive?.[0]?.sum?.requests ?? 0;
   const pagesRequests = sumGroups(
@@ -529,36 +619,36 @@ async function fetchAllMetrics(
       'kv_reads',
       kvResult.ok ? kvResult.kvReads : 0,
       limits.kv_reads,
-      kvResult.ok,
-      kvResult.ok ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk,
+      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
     ),
     kv_writes: buildMetric(
       'kv_writes',
       kvResult.ok ? kvResult.kvWrites : 0,
       limits.kv_writes,
-      kvResult.ok,
-      kvResult.ok ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk,
+      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
     ),
     kv_deletes: buildMetric(
       'kv_deletes',
       kvResult.ok ? kvResult.kvDeletes : 0,
       limits.kv_deletes,
-      kvResult.ok,
-      kvResult.ok ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk,
+      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
     ),
     kv_lists: buildMetric(
       'kv_lists',
       kvResult.ok ? kvResult.kvLists : 0,
       limits.kv_lists,
-      kvResult.ok,
-      kvResult.ok ? undefined : UNAVAILABLE_NOTE,
+      kvOpsOk,
+      kvOpsOk ? undefined : UNAVAILABLE_NOTE,
     ),
     kv_storage_gb: buildMetric(
       'kv_storage_gb',
       kvResult.ok ? kvResult.kvStorageBytes : 0,
       limits.kv_storage_gb,
-      kvResult.ok,
-      kvResult.ok ? undefined : UNAVAILABLE_NOTE,
+      kvStorageOk,
+      kvStorageOk ? undefined : UNAVAILABLE_NOTE,
     ),
     r2_storage_gb: buildMetric(
       'r2_storage_gb',
