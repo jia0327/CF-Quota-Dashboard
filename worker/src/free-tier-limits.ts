@@ -72,13 +72,13 @@ export const DEFAULT_FREE_TIER_LIMITS: FreeTierLimitsConfig = {
     limit: 1_000_000,
     period: 'monthly',
     unit: 'ops',
-    label: 'R2 Class A Ops',
+    label: 'R2 Class A Ops (writes)',
   },
   r2_class_b: {
     limit: 10_000_000,
     period: 'monthly',
     unit: 'ops',
-    label: 'R2 Class B Ops',
+    label: 'R2 Class B Ops (reads)',
   },
   workers_build_minutes: {
     limit: 3_000,
