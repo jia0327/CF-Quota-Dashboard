@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange.svg)](https://workers.cloudflare.com/)
 [![Hono](https://img.shields.io/badge/Hono-Framework-e36002.svg)](https://hono.dev/)
-[![GitHub](https://img.shields.io/badge/GitHub-cf--fork--div%2FCF--Quota--Dashboard-181717?logo=github)](https://github.com/cf-fork-div/CF-Quota-Dashboard)
+[![GitHub stars](https://img.shields.io/github/stars/cf-fork-div/CF-Quota-Dashboard?style=flat&logo=github)](https://github.com/cf-fork-div/CF-Quota-Dashboard)
 
 </div>
 
@@ -23,15 +23,15 @@
 
 ## 🚀 在线 Demo
 
-👉 **[https://cf-quota-dashboard.1732330472.workers.dev](https://cf-quota-dashboard.1732330472.workers.dev)**
+👉 **[https://cf-quota-dashboard.itellme.workers.dev](https://cf-quota-dashboard.itellme.workers.dev/)**
 
 | 路径 | 说明 |
 |------|------|
-| `/` | 公开仪表盘 — 跨账号汇总配额 |
-| `/admin` | 账号管理 — **需配置 `PASSWORD` 后登录** |
-| `/channels` | 通知渠道 — 需登录后配置 |
+| [`/`](https://cf-quota-dashboard.itellme.workers.dev/) | 公开仪表盘 — 跨账号汇总配额 |
+| [`/admin`](https://cf-quota-dashboard.itellme.workers.dev/admin) | 账号管理 — 登录码 **`admin`** |
+| [`/channels`](https://cf-quota-dashboard.itellme.workers.dev/channels) | 通知渠道 — 需登录后配置 |
 
-> 生产站点已启用密码保护。部署自己的实例后，使用 `wrangler secret put PASSWORD` 设置登录码即可访问 `/admin` 与管理 API。
+> Demo 仅供体验。部署自己的实例见下方 [部署](#-部署) 与 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
 ---
 
@@ -111,61 +111,16 @@
 
 ---
 
-## 🛠️ 部署指南
+## 🛠️ 部署
 
-支持 **[一键部署](docs/DEPLOY.md#1-一键部署)** 与 **[GitHub Actions](docs/DEPLOY.md#2-github-actions-部署)**，流程与效果相同。部署前请先完成 [docs/DEPLOY.md 前置条件](docs/DEPLOY.md#前置条件)（创建 API Token）。
+支持 **一键部署**（本地 `npm run quick-deploy`）与 **GitHub Actions**（推送 `master` 自动更新），流程与效果相同。
 
-> GitHub Actions 的 `CLOUDFLARE_API_TOKEN` 须含 **Workers Scripts → Edit** 与 **Workers KV Storage → Edit**，否则上传静态资源会报 `Authentication error [code: 10000]`。
+👉 **完整步骤见 [docs/DEPLOY.md](docs/DEPLOY.md)** — 含前置条件（API Token）、一键部署命令、GitHub Secrets 配置与部署后验证。
 
-### 一键部署
-
-需 [Node.js 18+](https://nodejs.org/)。整段复制粘贴对应代码块（Mac / Linux / Git Bash → Bash，Windows → PowerShell）。
-
-### Bash / Git Bash
-
-```bash
-# 运行前修改下方密码、API Token 与语言（zh/en）。
-# API Token 创建步骤见 docs/DEPLOY.md「前置条件」。
-# 运行中会打开浏览器完成 wrangler 登录。
-# 部署成功后打开终端输出的地址；脚本会自动添加当前 Cloudflare 账号为监控账号。
-git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
-cd CF-Quota-Dashboard
-npm install
-export QUICK_DEPLOY_PASSWORD='your-strong-password'  # ← 修改密码（/admin 登录用）
-export QUICK_DEPLOY_API_TOKEN='your-api-token'       # ← 修改 API Token（拉取配额用）
-export QUICK_DEPLOY_LANG=zh                          # ← 修改语言（zh 或 en）
-npm run quick-deploy
-```
-
-### Windows PowerShell
-
-```powershell
-# 运行前修改下方密码、API Token 与语言（zh/en）。
-# API Token 创建步骤见 docs/DEPLOY.md「前置条件」。
-# 运行中会打开浏览器完成 wrangler 登录。
-# 部署成功后打开终端输出的地址；脚本会自动添加当前 Cloudflare 账号为监控账号。
-git clone https://github.com/cf-fork-div/CF-Quota-Dashboard.git
-cd CF-Quota-Dashboard
-npm install
-$env:QUICK_DEPLOY_PASSWORD='your-strong-password'  # ← 修改密码（/admin 登录用）
-$env:QUICK_DEPLOY_API_TOKEN='your-api-token'     # ← 修改 API Token（拉取配额用）
-$env:QUICK_DEPLOY_LANG='zh'                       # ← 修改语言（zh 或 en）
-npm run quick-deploy
-```
-
-**前置条件：** 浏览器已登录 [Cloudflare](https://dash.cloudflare.com/)；[API Token 已创建](docs/DEPLOY.md#前置条件)（一键部署 → `QUICK_DEPLOY_API_TOKEN`，GitHub → `CLOUDFLARE_API_TOKEN`）。完整说明见 [docs/DEPLOY.md](docs/DEPLOY.md)。
-
-### GitHub Actions
-
-Fork 仓库后，在 **Settings → Secrets and variables → Actions** 配置 3 个 Secret：
-
-| Secret | 说明 |
-|--------|------|
-| `CLOUDFLARE_API_TOKEN` | 前置条件创建的 API Token（须含 Workers Scripts / KV **Edit**） |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
-| `PASSWORD` | `/admin` 登录码 |
-
-推送 `master` 或 Actions 页 **Run workflow** 即自动部署。详见 [docs/DEPLOY.md §2](docs/DEPLOY.md#2-github-actions-部署)。
+| 方式 | 文档 |
+|------|------|
+| 一键部署 | [§1 运行一键部署](docs/DEPLOY.md#1-一键部署) |
+| GitHub Actions | [§2 GitHub Actions 部署](docs/DEPLOY.md#2-github-actions-部署) |
 
 ---
 
