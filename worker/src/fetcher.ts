@@ -15,7 +15,7 @@ const GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 const REST_BASE = 'https://api.cloudflare.com/client/v4';
 
 /** Estimated external subrequests per account (GraphQL batches + REST). */
-export const SUBREQUESTS_PER_ACCOUNT = 13;
+export const SUBREQUESTS_PER_ACCOUNT = 14;
 
 function formatUtcDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -258,7 +258,7 @@ interface ViewerAccount {
   }>;
   pagesFunctionsInvocationsAdaptiveGroups?: Array<{
     sum?: { requests?: number };
-    dimensions?: { projectName?: string };
+    dimensions?: { scriptName?: string };
   }>;
 }
 
@@ -553,37 +553,31 @@ async function fetchPagesProjects(
   return { ok: true, projects: result.data };
 }
 
-async function fetchRequestMetrics(
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+async function fetchWorkersRequestMetrics(
   token: string,
   accountId: string,
   day: { start: string; end: string },
 ): Promise<
-  | {
-    ok: true;
-    workersRequests: number;
-    pagesRequests: number;
-    byScript: Map<string, number>;
-    byProject: Map<string, number>;
-  }
+  | { ok: true; workersRequests: number; byScript: Map<string, number> }
   | { ok: false; error: string }
 > {
-  const requestQuery = `query RequestMetrics($accountTag: String!, $dayStart: DateTime!, $dayEnd: DateTime!) {
+  const workersQuery = `query WorkersRequestMetrics($accountTag: String!, $dayStart: DateTime!, $dayEnd: DateTime!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
         workersInvocationsAdaptive(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
           dimensions { scriptName }
           sum { requests }
         }
-        pagesFunctionsInvocationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
-          dimensions { projectName }
-          sum { requests }
-        }
       }
     }
   }`;
 
-  const result = await safeQuery('requests', () =>
-    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, requestQuery, {
+  const result = await safeQuery('workers-requests', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, workersQuery, {
       accountTag: accountId,
       dayStart: day.start,
       dayEnd: day.end,
@@ -604,18 +598,101 @@ async function fetchRequestMetrics(
     }
   }
 
+  return { ok: true, workersRequests, byScript };
+}
+
+function sumPagesScriptRequests(
+  projectName: string,
+  byScript: Map<string, number>,
+): number {
+  const normalized = projectName.toLowerCase();
+  let total = 0;
+  for (const [script, requests] of byScript) {
+    const scriptLower = script.toLowerCase();
+    if (
+      scriptLower === normalized
+      || scriptLower.endsWith(`-${normalized}`)
+      || scriptLower.startsWith(`${normalized}-`)
+    ) {
+      total += requests;
+    }
+  }
+  return total;
+}
+
+async function fetchPagesRequestMetrics(
+  token: string,
+  accountId: string,
+  day: { start: string; end: string },
+  projects: Array<{ id: string; name: string }>,
+): Promise<
+  | { ok: true; pagesRequests: number; byProject: Map<string, number> }
+  | { ok: false; error: string }
+> {
+  const pagesTotalQuery = `query PagesRequestMetrics($accountTag: String!, $dayStart: DateTime!, $dayEnd: DateTime!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        pagesFunctionsInvocationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+          sum { requests }
+        }
+      }
+    }
+  }`;
+
+  const totalResult = await safeQuery('pages-requests', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, pagesTotalQuery, {
+      accountTag: accountId,
+      dayStart: day.start,
+      dayEnd: day.end,
+    }),
+  );
+
+  if (!totalResult.ok) return totalResult;
+
+  const acc = getAccount(totalResult.data);
+  const pagesRequests = sumGroups(
+    acc.pagesFunctionsInvocationsAdaptiveGroups,
+    (g) => g.sum?.requests,
+  );
+
   const byProject = new Map<string, number>();
-  let pagesRequests = 0;
-  for (const g of acc.pagesFunctionsInvocationsAdaptiveGroups ?? []) {
-    const requests = g.sum?.requests ?? 0;
-    pagesRequests += requests;
-    const projectName = g.dimensions?.projectName ?? '';
-    if (projectName) {
-      byProject.set(projectName, (byProject.get(projectName) ?? 0) + requests);
+  if (projects.length > 0) {
+    const pagesBreakdownQuery = `query PagesRequestBreakdown($accountTag: String!, $dayStart: DateTime!, $dayEnd: DateTime!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          pagesFunctionsInvocationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+            dimensions { scriptName }
+            sum { requests }
+          }
+        }
+      }
+    }`;
+
+    const breakdownResult = await safeQuery('pages-requests-breakdown', () =>
+      graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, pagesBreakdownQuery, {
+        accountTag: accountId,
+        dayStart: day.start,
+        dayEnd: day.end,
+      }),
+    );
+
+    const byScript = new Map<string, number>();
+    if (breakdownResult.ok) {
+      const breakdownAcc = getAccount(breakdownResult.data);
+      for (const g of breakdownAcc.pagesFunctionsInvocationsAdaptiveGroups ?? []) {
+        const scriptName = g.dimensions?.scriptName ?? '';
+        if (!scriptName || isUuidLike(scriptName)) continue;
+        const requests = g.sum?.requests ?? 0;
+        byScript.set(scriptName, (byScript.get(scriptName) ?? 0) + requests);
+      }
+    }
+
+    for (const project of projects) {
+      byProject.set(project.name, sumPagesScriptRequests(project.name, byScript));
     }
   }
 
-  return { ok: true, workersRequests, pagesRequests, byScript, byProject };
+  return { ok: true, pagesRequests, byProject };
 }
 
 async function fetchD1Databases(
@@ -1387,75 +1464,47 @@ function buildWorkersBreakdown(
   scripts: Array<{ id: string; name: string }>,
   byScript: Map<string, number>,
 ): ResourceUsageItem[] {
-  const seen = new Set<string>();
-  const items: ResourceUsageItem[] = scripts.map((script) => {
-    seen.add(script.id);
-    return {
+  return sortResourceItems(
+    scripts.map((script) => ({
       id: script.id,
       name: script.name,
       requests: byScript.get(script.id) ?? 0,
-    };
-  });
-
-  for (const [id, requests] of byScript) {
-    if (seen.has(id)) continue;
-    items.push({ id, name: id, requests });
-  }
-
-  return sortResourceItems(items, (item) => item.requests ?? 0);
+    })),
+    (item) => item.requests ?? 0,
+  );
 }
 
 function buildPagesBreakdown(
   projects: Array<{ id: string; name: string }>,
   byProject: Map<string, number>,
 ): ResourceUsageItem[] {
-  const seen = new Set<string>();
-  const items: ResourceUsageItem[] = projects.map((project) => {
-    seen.add(project.id);
-    return {
+  return sortResourceItems(
+    projects.map((project) => ({
       id: project.id,
       name: project.name,
       requests: byProject.get(project.id) ?? 0,
-    };
-  });
-
-  for (const [id, requests] of byProject) {
-    if (seen.has(id)) continue;
-    items.push({ id, name: id, requests });
-  }
-
-  return sortResourceItems(items, (item) => item.requests ?? 0);
+    })),
+    (item) => item.requests ?? 0,
+  );
 }
 
 function buildD1Breakdown(
   databases: Array<{ id: string; name: string }>,
   byDatabase: Map<string, { reads: number; writes: number; storageBytes: number }>,
 ): ResourceUsageItem[] {
-  const seen = new Set<string>();
-  const items: ResourceUsageItem[] = databases.map((db) => {
-    seen.add(db.id);
-    const usage = byDatabase.get(db.id);
-    return {
-      id: db.id,
-      name: db.name,
-      reads: usage?.reads ?? 0,
-      writes: usage?.writes ?? 0,
-      storageBytes: usage?.storageBytes ?? 0,
-    };
-  });
-
-  for (const [id, usage] of byDatabase) {
-    if (seen.has(id)) continue;
-    items.push({
-      id,
-      name: id,
-      reads: usage.reads,
-      writes: usage.writes,
-      storageBytes: usage.storageBytes,
-    });
-  }
-
-  return sortResourceItems(items, (item) => (item.reads ?? 0) + (item.writes ?? 0) + (item.storageBytes ?? 0));
+  return sortResourceItems(
+    databases.map((db) => {
+      const usage = byDatabase.get(db.id);
+      return {
+        id: db.id,
+        name: db.name,
+        reads: usage?.reads ?? 0,
+        writes: usage?.writes ?? 0,
+        storageBytes: usage?.storageBytes ?? 0,
+      };
+    }),
+    (item) => (item.reads ?? 0) + (item.writes ?? 0) + (item.storageBytes ?? 0),
+  );
 }
 
 function buildKvBreakdown(
@@ -1468,36 +1517,21 @@ function buildKvBreakdown(
     storageBytes: number;
   }>,
 ): ResourceUsageItem[] {
-  const seen = new Set<string>();
-  const items: ResourceUsageItem[] = namespaces.map((ns) => {
-    seen.add(ns.id);
-    const usage = byNamespace.get(ns.id);
-    return {
-      id: ns.id,
-      name: ns.name,
-      reads: usage?.reads ?? 0,
-      writes: usage?.writes ?? 0,
-      deletes: usage?.deletes ?? 0,
-      lists: usage?.lists ?? 0,
-      storageBytes: usage?.storageBytes ?? 0,
-    };
-  });
-
-  for (const [id, usage] of byNamespace) {
-    if (seen.has(id)) continue;
-    items.push({
-      id,
-      name: id,
-      reads: usage.reads,
-      writes: usage.writes,
-      deletes: usage.deletes,
-      lists: usage.lists,
-      storageBytes: usage.storageBytes,
-    });
-  }
-
   return sortResourceItems(
-    items,
+    namespaces
+      .filter((ns) => !isUuidLike(ns.name))
+      .map((ns) => {
+        const usage = byNamespace.get(ns.id);
+        return {
+          id: ns.id,
+          name: ns.name,
+          reads: usage?.reads ?? 0,
+          writes: usage?.writes ?? 0,
+          deletes: usage?.deletes ?? 0,
+          lists: usage?.lists ?? 0,
+          storageBytes: usage?.storageBytes ?? 0,
+        };
+      }),
     (item) => (item.reads ?? 0) + (item.writes ?? 0) + (item.storageBytes ?? 0),
   );
 }
@@ -1521,33 +1555,18 @@ function buildR2Breakdown(
     });
   }
 
-  const seen = new Set<string>();
-  const items: ResourceUsageItem[] = buckets.map((bucket) => {
-    const key = normalizeR2BucketKey(bucket.name);
-    seen.add(key);
-    const usage = usageByKey.get(key);
-    return {
-      id: bucket.name,
-      name: bucket.name,
-      storageBytes: usage?.storageBytes ?? 0,
-      classA: usage?.classA ?? 0,
-      classB: usage?.classB ?? 0,
-    };
-  });
-
-  for (const [key, usage] of usageByKey) {
-    if (seen.has(key)) continue;
-    items.push({
-      id: key,
-      name: key,
-      storageBytes: usage.storageBytes,
-      classA: usage.classA,
-      classB: usage.classB,
-    });
-  }
-
   return sortResourceItems(
-    items,
+    buckets.map((bucket) => {
+      const key = normalizeR2BucketKey(bucket.name);
+      const usage = usageByKey.get(key);
+      return {
+        id: bucket.name,
+        name: bucket.name,
+        storageBytes: usage?.storageBytes ?? 0,
+        classA: usage?.classA ?? 0,
+        classB: usage?.classB ?? 0,
+      };
+    }),
     (item) => (item.storageBytes ?? 0) + (item.classA ?? 0) + (item.classB ?? 0),
   );
 }
@@ -1572,9 +1591,15 @@ async function fetchAllMetrics(
     nowIso,
   );
 
-  const requestMetricsResult = await fetchRequestMetrics(token, accountId, ranges.day);
+  const workersMetricsResult = await fetchWorkersRequestMetrics(token, accountId, ranges.day);
   const workerScriptsResult = await fetchWorkerScripts(token, accountId);
   const pagesProjectsResult = await fetchPagesProjects(token, accountId);
+  const pagesMetricsResult = await fetchPagesRequestMetrics(
+    token,
+    accountId,
+    ranges.day,
+    pagesProjectsResult.ok ? pagesProjectsResult.projects : [],
+  );
 
   const d1Result = await fetchD1Metrics(token, accountId, ranges.day, ranges.month);
   const d1DatabasesResult = await fetchD1Databases(token, accountId);
@@ -1588,7 +1613,8 @@ async function fetchAllMetrics(
     fetchPagesBuilds(token, accountId, ranges.month.start, nowIso),
   );
 
-  if (!requestMetricsResult.ok) partialErrors.push(requestMetricsResult.error);
+  if (!workersMetricsResult.ok) partialErrors.push(workersMetricsResult.error);
+  if (!pagesMetricsResult.ok) partialErrors.push(pagesMetricsResult.error);
   if (!d1Result.ok) partialErrors.push(d1Result.error);
   if (!kvResult.ok) partialErrors.push(kvResult.error);
   else if (kvResult.errors.length) partialErrors.push(...kvResult.errors);
@@ -1599,8 +1625,8 @@ async function fetchAllMetrics(
   const kvOpsOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-ops'));
   const kvStorageOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-storage'));
 
-  const workersRequests = requestMetricsResult.ok ? requestMetricsResult.workersRequests : 0;
-  const pagesRequests = requestMetricsResult.ok ? requestMetricsResult.pagesRequests : 0;
+  const workersRequests = workersMetricsResult.ok ? workersMetricsResult.workersRequests : 0;
+  const pagesRequests = pagesMetricsResult.ok ? pagesMetricsResult.pagesRequests : 0;
 
   const queuesOps = sumGroups(
     acc.queueMessageOperationsAdaptiveGroups,
@@ -1631,8 +1657,8 @@ async function fetchAllMetrics(
       'workers_requests',
       workersRequests,
       limits.workers_requests,
-      requestMetricsResult.ok,
-      requestMetricsResult.ok ? undefined : metricNote('requests', partialErrors),
+      workersMetricsResult.ok,
+      workersMetricsResult.ok ? undefined : metricNote('workers-requests', partialErrors),
     ),
     d1_reads: buildMetric(
       'd1_reads',
@@ -1758,8 +1784,8 @@ async function fetchAllMetrics(
       'pages_requests',
       pagesRequests,
       limits.pages_requests,
-      requestMetricsResult.ok,
-      requestMetricsResult.ok ? undefined : metricNote('requests', partialErrors),
+      pagesMetricsResult.ok,
+      pagesMetricsResult.ok ? undefined : metricNote('pages-requests', partialErrors),
     ),
     ai_neurons: buildMetric('ai_neurons', aiNeurons, limits.ai_neurons),
     queues_ops: buildMetric('queues_ops', queuesOps, limits.queues_ops),
@@ -1793,30 +1819,18 @@ async function fetchAllMetrics(
   };
 
   const resourceBreakdown: ResourceBreakdown = {};
-  if (requestMetricsResult.ok) {
-    if (workerScriptsResult.ok && workerScriptsResult.scripts.length > 0) {
-      resourceBreakdown.workers = buildWorkersBreakdown(
-        workerScriptsResult.scripts,
-        requestMetricsResult.byScript,
-      );
-    } else if (requestMetricsResult.byScript.size > 0) {
-      resourceBreakdown.workers = buildWorkersBreakdown(
-        [...requestMetricsResult.byScript.keys()].map((name) => ({ id: name, name })),
-        requestMetricsResult.byScript,
-      );
-    }
+  if (workersMetricsResult.ok && workerScriptsResult.ok && workerScriptsResult.scripts.length > 0) {
+    resourceBreakdown.workers = buildWorkersBreakdown(
+      workerScriptsResult.scripts,
+      workersMetricsResult.byScript,
+    );
+  }
 
-    if (pagesProjectsResult.ok && pagesProjectsResult.projects.length > 0) {
-      resourceBreakdown.pages = buildPagesBreakdown(
-        pagesProjectsResult.projects,
-        requestMetricsResult.byProject,
-      );
-    } else if (requestMetricsResult.byProject.size > 0) {
-      resourceBreakdown.pages = buildPagesBreakdown(
-        [...requestMetricsResult.byProject.keys()].map((name) => ({ id: name, name })),
-        requestMetricsResult.byProject,
-      );
-    }
+  if (pagesProjectsResult.ok && pagesMetricsResult.ok && pagesProjectsResult.projects.length > 0) {
+    resourceBreakdown.pages = buildPagesBreakdown(
+      pagesProjectsResult.projects,
+      pagesMetricsResult.byProject,
+    );
   }
   if (d1DatabasesResult.ok && d1Result.ok && d1DatabasesResult.databases.length > 0) {
     resourceBreakdown.d1 = buildD1Breakdown(d1DatabasesResult.databases, d1Result.byDatabase);
