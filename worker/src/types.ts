@@ -22,6 +22,28 @@ export interface ServiceStatusMap {
   r2?: ServiceActivationStatus;
 }
 
+/** Per-resource usage within an account (D1 database, KV namespace, R2 bucket, Worker script, Pages project). */
+export interface ResourceUsageItem {
+  id: string;
+  name: string;
+  requests?: number;
+  reads?: number;
+  writes?: number;
+  deletes?: number;
+  lists?: number;
+  storageBytes?: number;
+  classA?: number;
+  classB?: number;
+}
+
+export interface ResourceBreakdown {
+  workers?: ResourceUsageItem[];
+  pages?: ResourceUsageItem[];
+  d1?: ResourceUsageItem[];
+  kv?: ResourceUsageItem[];
+  r2?: ResourceUsageItem[];
+}
+
 /** Per-metric push notification rule for an account */
 export interface AccountAlertRule {
   metricKey: string;
@@ -55,6 +77,8 @@ export interface AccountSnapshot {
   status: 'ok' | 'error';
   error?: string;
   quotas: QuotasMap;
+  /** Per-database / namespace / bucket usage when list APIs succeed. */
+  resourceBreakdown?: ResourceBreakdown;
   /** Per-product subscription state (e.g. R2 not enabled on account). */
   serviceStatus?: ServiceStatusMap;
   /** ISO timestamp of last successful quota fetch for this account */

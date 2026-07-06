@@ -3,6 +3,8 @@ import type {
   FetchResult,
   FreeTierLimitsConfig,
   QuotasMap,
+  ResourceBreakdown,
+  ResourceUsageItem,
   ServiceActivationStatus,
   ServiceStatusMap,
 } from './types';
@@ -13,7 +15,7 @@ const GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 const REST_BASE = 'https://api.cloudflare.com/client/v4';
 
 /** Estimated external subrequests per account (GraphQL batches + REST). */
-export const SUBREQUESTS_PER_ACCOUNT = 10;
+export const SUBREQUESTS_PER_ACCOUNT = 13;
 
 function formatUtcDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -136,14 +138,28 @@ interface R2BucketListResult {
   buckets?: Array<{ name?: string }>;
 }
 
-async function fetchR2BucketCount(
+interface D1DatabaseInfo {
+  uuid?: string;
+  name?: string;
+}
+
+interface KvNamespaceInfo {
+  id?: string;
+  title?: string;
+}
+
+interface PagesProject {
+  name: string;
+}
+
+async function fetchR2Buckets(
   token: string,
   accountId: string,
 ): Promise<
-  | { ok: true; count: number; activation: ServiceActivationStatus }
+  | { ok: true; count: number; buckets: Array<{ name: string }>; activation: ServiceActivationStatus }
   | { ok: false; error: string; activation: ServiceActivationStatus }
 > {
-  let count = 0;
+  const buckets: Array<{ name: string }> = [];
   let cursor: string | undefined;
   let page = 0;
 
@@ -166,27 +182,44 @@ async function fetchR2BucketCount(
     }
 
     const batch = result.data.result?.buckets ?? [];
-    count += batch.length;
+    for (const bucket of batch) {
+      if (bucket.name) buckets.push({ name: bucket.name });
+    }
     cursor = result.data.result_info?.cursor;
     if (!cursor || batch.length === 0) break;
     page += 1;
   }
 
-  return { ok: true, count, activation: 'activated' };
+  return { ok: true, count: buckets.length, buckets, activation: 'activated' };
 }
 
 interface ViewerAccount {
-  workersInvocationsAdaptive?: Array<{ sum?: { requests?: number; cpuTimeUs?: number } }>;
+  workersInvocationsAdaptive?: Array<{
+    sum?: { requests?: number; cpuTimeUs?: number };
+    dimensions?: { scriptName?: string };
+  }>;
   kvOperationsAdaptiveGroups?: Array<{
-    dimensions?: { actionType?: string };
+    dimensions?: { actionType?: string; namespaceId?: string };
     sum?: { requests?: number };
   }>;
-  kvStorageAdaptiveGroups?: Array<{ max?: { byteCount?: number } }>;
-  d1AnalyticsAdaptiveGroups?: Array<{ sum?: { rowsRead?: number; rowsWritten?: number } }>;
-  d1StorageAdaptiveGroups?: Array<{ max?: { databaseSizeBytes?: number } }>;
-  r2StorageAdaptiveGroups?: Array<{ max?: { payloadSize?: number; metadataSize?: number } }>;
+  kvStorageAdaptiveGroups?: Array<{
+    max?: { byteCount?: number };
+    dimensions?: { namespaceId?: string; date?: string };
+  }>;
+  d1AnalyticsAdaptiveGroups?: Array<{
+    sum?: { rowsRead?: number; rowsWritten?: number };
+    dimensions?: { databaseId?: string };
+  }>;
+  d1StorageAdaptiveGroups?: Array<{
+    max?: { databaseSizeBytes?: number };
+    dimensions?: { databaseId?: string; datetime?: string };
+  }>;
+  r2StorageAdaptiveGroups?: Array<{
+    max?: { payloadSize?: number; metadataSize?: number };
+    dimensions?: { bucketName?: string; datetime?: string };
+  }>;
   r2OperationsAdaptiveGroups?: Array<{
-    dimensions?: { actionType?: string };
+    dimensions?: { actionType?: string; bucketName?: string };
     sum?: { requests?: number };
   }>;
   queueMessageOperationsAdaptiveGroups?: Array<{ sum?: { billableOperations?: number } }>;
@@ -223,7 +256,10 @@ interface ViewerAccount {
     sum?: { buildMinutes?: number };
     dimensions?: { date?: string };
   }>;
-  pagesFunctionsInvocationsAdaptiveGroups?: Array<{ sum?: { requests?: number } }>;
+  pagesFunctionsInvocationsAdaptiveGroups?: Array<{
+    sum?: { requests?: number };
+    dimensions?: { projectName?: string };
+  }>;
 }
 
 function getAccount(data: { viewer?: { accounts?: ViewerAccount[] } }): ViewerAccount {
@@ -330,9 +366,6 @@ async function fetchCoreMetrics(
   ) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
-        workersInvocationsAdaptive(limit: 1, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
-          sum { requests }
-        }
         queueMessageOperationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
           sum { billableOperations }
         }
@@ -359,9 +392,6 @@ async function fetchCoreMetrics(
         }
         durableObjectsSqlStorageGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
           max { storedBytes }
-        }
-        pagesFunctionsInvocationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
-          sum { requests }
         }
       }
     }
@@ -452,66 +482,214 @@ async function fetchWorkersBuildMinutes(
   };
 }
 
-async function fetchD1DatabaseCount(
+async function fetchWorkerScripts(
   token: string,
   accountId: string,
-): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; scripts: Array<{ id: string; name: string }> } | { ok: false; error: string }> {
+  const result = await safeQuery('worker-scripts', async () => {
+    const scripts: Array<{ id: string; name: string }> = [];
+    const first = await restRequestRaw<Array<{ id?: string }>>(
+      token,
+      `/accounts/${accountId}/workers/scripts`,
+    );
+    const appendBatch = (batch: Array<{ id?: string }>) => {
+      for (const script of batch) {
+        if (script.id) {
+          scripts.push({ id: script.id, name: script.id });
+        }
+      }
+    };
+    appendBatch(first.result ?? []);
+
+    let page = 2;
+    while (page <= 100) {
+      const body = await restRequestRaw<Array<{ id?: string }>>(
+        token,
+        `/accounts/${accountId}/workers/scripts?page=${page}`,
+      );
+      const batch = body.result ?? [];
+      appendBatch(batch);
+      if (batch.length < 100) break;
+      page += 1;
+    }
+    return scripts;
+  });
+
+  if (!result.ok) return result;
+  return { ok: true, scripts: result.data };
+}
+
+async function fetchPagesProjects(
+  token: string,
+  accountId: string,
+): Promise<{ ok: true; projects: Array<{ id: string; name: string }> } | { ok: false; error: string }> {
+  const result = await safeQuery('pages-projects', async () => {
+    const projects: Array<{ id: string; name: string }> = [];
+    const first = await restRequestRaw<PagesProject[]>(
+      token,
+      `/accounts/${accountId}/pages/projects`,
+    );
+    const appendBatch = (batch: PagesProject[]) => {
+      for (const project of batch) {
+        if (project.name) {
+          projects.push({ id: project.name, name: project.name });
+        }
+      }
+    };
+    appendBatch(first.result ?? []);
+
+    const totalPages = first.result_info?.total_pages ?? 1;
+    for (let page = 2; page <= totalPages && page <= 100; page++) {
+      const body = await restRequestRaw<PagesProject[]>(
+        token,
+        `/accounts/${accountId}/pages/projects?page=${page}`,
+      );
+      appendBatch(body.result ?? []);
+    }
+    return projects;
+  });
+
+  if (!result.ok) return result;
+  return { ok: true, projects: result.data };
+}
+
+async function fetchRequestMetrics(
+  token: string,
+  accountId: string,
+  day: { start: string; end: string },
+): Promise<
+  | {
+    ok: true;
+    workersRequests: number;
+    pagesRequests: number;
+    byScript: Map<string, number>;
+    byProject: Map<string, number>;
+  }
+  | { ok: false; error: string }
+> {
+  const requestQuery = `query RequestMetrics($accountTag: String!, $dayStart: DateTime!, $dayEnd: DateTime!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        workersInvocationsAdaptive(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+          dimensions { scriptName }
+          sum { requests }
+        }
+        pagesFunctionsInvocationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+          dimensions { projectName }
+          sum { requests }
+        }
+      }
+    }
+  }`;
+
+  const result = await safeQuery('requests', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, requestQuery, {
+      accountTag: accountId,
+      dayStart: day.start,
+      dayEnd: day.end,
+    }),
+  );
+
+  if (!result.ok) return result;
+
+  const acc = getAccount(result.data);
+  const byScript = new Map<string, number>();
+  let workersRequests = 0;
+  for (const g of acc.workersInvocationsAdaptive ?? []) {
+    const requests = g.sum?.requests ?? 0;
+    workersRequests += requests;
+    const scriptName = g.dimensions?.scriptName ?? '';
+    if (scriptName) {
+      byScript.set(scriptName, (byScript.get(scriptName) ?? 0) + requests);
+    }
+  }
+
+  const byProject = new Map<string, number>();
+  let pagesRequests = 0;
+  for (const g of acc.pagesFunctionsInvocationsAdaptiveGroups ?? []) {
+    const requests = g.sum?.requests ?? 0;
+    pagesRequests += requests;
+    const projectName = g.dimensions?.projectName ?? '';
+    if (projectName) {
+      byProject.set(projectName, (byProject.get(projectName) ?? 0) + requests);
+    }
+  }
+
+  return { ok: true, workersRequests, pagesRequests, byScript, byProject };
+}
+
+async function fetchD1Databases(
+  token: string,
+  accountId: string,
+): Promise<{ ok: true; databases: Array<{ id: string; name: string }> } | { ok: false; error: string }> {
   const result = await safeQuery('d1-databases', async () => {
-    const first = await restRequestRaw<unknown[]>(
+    const databases: Array<{ id: string; name: string }> = [];
+    const first = await restRequestRaw<D1DatabaseInfo[]>(
       token,
       `/accounts/${accountId}/d1/database?per_page=100`,
     );
-    const totalCount = first.result_info?.total_count;
-    if (typeof totalCount === 'number') return totalCount;
+    const appendBatch = (batch: D1DatabaseInfo[]) => {
+      for (const db of batch) {
+        if (db.uuid) {
+          databases.push({ id: db.uuid, name: db.name?.trim() || db.uuid });
+        }
+      }
+    };
+    appendBatch(first.result ?? []);
 
-    let count = (first.result ?? []).length;
     let page = 2;
     while (page <= 100) {
-      const body = await restRequestRaw<unknown[]>(
+      const body = await restRequestRaw<D1DatabaseInfo[]>(
         token,
         `/accounts/${accountId}/d1/database?per_page=100&page=${page}`,
       );
       const batch = body.result ?? [];
-      count += batch.length;
+      appendBatch(batch);
       if (batch.length < 100) break;
       page += 1;
     }
-    return count;
+    return databases;
   });
 
   if (!result.ok) return result;
-  return { ok: true, count: result.data };
+  return { ok: true, databases: result.data };
 }
 
-async function fetchKvNamespaceCount(
+async function fetchKvNamespaces(
   token: string,
   accountId: string,
-): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; namespaces: Array<{ id: string; name: string }> } | { ok: false; error: string }> {
   const result = await safeQuery('kv-namespaces', async () => {
-    const first = await restRequestRaw<unknown[]>(
+    const namespaces: Array<{ id: string; name: string }> = [];
+    const first = await restRequestRaw<KvNamespaceInfo[]>(
       token,
       `/accounts/${accountId}/storage/kv/namespaces?per_page=100`,
     );
-    const totalCount = first.result_info?.total_count;
-    if (typeof totalCount === 'number') return totalCount;
+    const appendBatch = (batch: KvNamespaceInfo[]) => {
+      for (const ns of batch) {
+        if (ns.id) {
+          namespaces.push({ id: ns.id, name: ns.title?.trim() || ns.id });
+        }
+      }
+    };
+    appendBatch(first.result ?? []);
 
-    let count = (first.result ?? []).length;
     let page = 2;
     while (page <= 100) {
-      const body = await restRequestRaw<unknown[]>(
+      const body = await restRequestRaw<KvNamespaceInfo[]>(
         token,
         `/accounts/${accountId}/storage/kv/namespaces?per_page=100&page=${page}`,
       );
       const batch = body.result ?? [];
-      count += batch.length;
+      appendBatch(batch);
       if (batch.length < 100) break;
       page += 1;
     }
-    return count;
+    return namespaces;
   });
 
   if (!result.ok) return result;
-  return { ok: true, count: result.data };
+  return { ok: true, namespaces: result.data };
 }
 
 async function fetchD1Metrics(
@@ -520,7 +698,13 @@ async function fetchD1Metrics(
   day: { start: string; end: string },
   month: { start: string; end: string },
 ): Promise<
-  | { ok: true; d1Reads: number; d1Writes: number; d1StorageBytes: number }
+  | {
+    ok: true;
+    d1Reads: number;
+    d1Writes: number;
+    d1StorageBytes: number;
+    byDatabase: Map<string, { reads: number; writes: number; storageBytes: number }>;
+  }
   | { ok: false; error: string }
 > {
   const d1Query = `query D1Metrics(
@@ -531,9 +715,11 @@ async function fetchD1Metrics(
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
         d1AnalyticsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $dayStart, datetime_leq: $dayEnd }) {
+          dimensions { databaseId }
           sum { rowsRead rowsWritten }
         }
         d1StorageAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+          dimensions { databaseId datetime }
           max { databaseSizeBytes }
         }
       }
@@ -553,11 +739,43 @@ async function fetchD1Metrics(
   if (!result.ok) return result;
 
   const acc = getAccount(result.data);
+  const byDatabase = new Map<string, { reads: number; writes: number; storageBytes: number }>();
+  const ensureDb = (id: string) => {
+    if (!byDatabase.has(id)) {
+      byDatabase.set(id, { reads: 0, writes: 0, storageBytes: 0 });
+    }
+    return byDatabase.get(id)!;
+  };
+
+  for (const g of acc.d1AnalyticsAdaptiveGroups ?? []) {
+    const id = g.dimensions?.databaseId ?? '';
+    if (!id) continue;
+    const entry = ensureDb(id);
+    entry.reads += g.sum?.rowsRead ?? 0;
+    entry.writes += g.sum?.rowsWritten ?? 0;
+  }
+
+  const latestStorage = new Map<string, { bytes: number; datetime: string }>();
+  for (const g of acc.d1StorageAdaptiveGroups ?? []) {
+    const id = g.dimensions?.databaseId ?? '';
+    if (!id) continue;
+    const datetime = g.dimensions?.datetime ?? '';
+    const bytes = g.max?.databaseSizeBytes ?? 0;
+    const prev = latestStorage.get(id);
+    if (!prev || datetime > prev.datetime) {
+      latestStorage.set(id, { bytes, datetime });
+    }
+  }
+  for (const [id, { bytes }] of latestStorage) {
+    ensureDb(id).storageBytes = bytes;
+  }
+
   return {
     ok: true,
     d1Reads: sumGroups(acc.d1AnalyticsAdaptiveGroups, (g) => g.sum?.rowsRead),
     d1Writes: sumGroups(acc.d1AnalyticsAdaptiveGroups, (g) => g.sum?.rowsWritten),
-    d1StorageBytes: sumGroups(acc.d1StorageAdaptiveGroups, (g) => g.max?.databaseSizeBytes),
+    d1StorageBytes: [...latestStorage.values()].reduce((t, v) => t + v.bytes, 0),
+    byDatabase,
   };
 }
 
@@ -566,14 +784,21 @@ async function fetchKvOperations(
   accountId: string,
   dayDate: { start: string; end: string },
 ): Promise<
-  | { ok: true; kvReads: number; kvWrites: number; kvDeletes: number; kvLists: number }
+  | {
+    ok: true;
+    kvReads: number;
+    kvWrites: number;
+    kvDeletes: number;
+    kvLists: number;
+    byNamespace: Map<string, { reads: number; writes: number; deletes: number; lists: number }>;
+  }
   | { ok: false; error: string }
 > {
   const kvOpsQuery = `query KvOps($accountTag: String!, $dayStart: Date!, $dateEnd: Date!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
         kvOperationsAdaptiveGroups(limit: 10000, filter: { date_geq: $dayStart, date_leq: $dateEnd }) {
-          dimensions { actionType }
+          dimensions { namespaceId actionType }
           sum { requests }
         }
       }
@@ -595,23 +820,42 @@ async function fetchKvOperations(
   let kvWrites = 0;
   let kvDeletes = 0;
   let kvLists = 0;
+  const byNamespace = new Map<string, { reads: number; writes: number; deletes: number; lists: number }>();
+  const ensureNs = (id: string) => {
+    if (!byNamespace.has(id)) {
+      byNamespace.set(id, { reads: 0, writes: 0, deletes: 0, lists: 0 });
+    }
+    return byNamespace.get(id)!;
+  };
+
   for (const g of acc.kvOperationsAdaptiveGroups ?? []) {
     const n = g.sum?.requests ?? 0;
     const action = (g.dimensions?.actionType ?? '').toLowerCase();
+    const nsId = g.dimensions?.namespaceId ?? '';
     if (action.includes('read')) kvReads += n;
     else if (action.includes('write')) kvWrites += n;
     else if (action.includes('delete')) kvDeletes += n;
     else if (action.includes('list')) kvLists += n;
+
+    if (!nsId) continue;
+    const entry = ensureNs(nsId);
+    if (action.includes('read')) entry.reads += n;
+    else if (action.includes('write')) entry.writes += n;
+    else if (action.includes('delete')) entry.deletes += n;
+    else if (action.includes('list')) entry.lists += n;
   }
 
-  return { ok: true, kvReads, kvWrites, kvDeletes, kvLists };
+  return { ok: true, kvReads, kvWrites, kvDeletes, kvLists, byNamespace };
 }
 
 async function fetchKvStorage(
   token: string,
   accountId: string,
   monthDate: { start: string; end: string },
-): Promise<{ ok: true; kvStorageBytes: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; kvStorageBytes: number; byNamespace: Map<string, number> }
+  | { ok: false; error: string }
+> {
   const kvStorageQuery = `query KvStorage($accountTag: String!, $storageStart: Date!, $dateEnd: Date!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
@@ -650,7 +894,11 @@ async function fetchKvStorage(
   }
 
   const kvStorageBytes = [...latestByNamespace.values()].reduce((t, v) => t + v.bytes, 0);
-  return { ok: true, kvStorageBytes };
+  const byNamespace = new Map<string, number>();
+  for (const [ns, { bytes }] of latestByNamespace) {
+    byNamespace.set(ns, bytes);
+  }
+  return { ok: true, kvStorageBytes, byNamespace };
 }
 
 async function fetchKvMetrics(
@@ -659,7 +907,22 @@ async function fetchKvMetrics(
   dayDate: { start: string; end: string },
   monthDate: { start: string; end: string },
 ): Promise<
-  | { ok: true; kvReads: number; kvWrites: number; kvDeletes: number; kvLists: number; kvStorageBytes: number; errors: string[] }
+  | {
+    ok: true;
+    kvReads: number;
+    kvWrites: number;
+    kvDeletes: number;
+    kvLists: number;
+    kvStorageBytes: number;
+    byNamespace: Map<string, {
+      reads: number;
+      writes: number;
+      deletes: number;
+      lists: number;
+      storageBytes: number;
+    }>;
+    errors: string[];
+  }
   | { ok: false; error: string }
 > {
   const opsResult = await fetchKvOperations(token, accountId, dayDate);
@@ -673,6 +936,35 @@ async function fetchKvMetrics(
     return { ok: false, error: errors.join('; ') };
   }
 
+  const byNamespace = new Map<string, {
+    reads: number;
+    writes: number;
+    deletes: number;
+    lists: number;
+    storageBytes: number;
+  }>();
+  const ensureNs = (id: string) => {
+    if (!byNamespace.has(id)) {
+      byNamespace.set(id, { reads: 0, writes: 0, deletes: 0, lists: 0, storageBytes: 0 });
+    }
+    return byNamespace.get(id)!;
+  };
+
+  if (opsResult.ok) {
+    for (const [id, usage] of opsResult.byNamespace) {
+      const entry = ensureNs(id);
+      entry.reads = usage.reads;
+      entry.writes = usage.writes;
+      entry.deletes = usage.deletes;
+      entry.lists = usage.lists;
+    }
+  }
+  if (storageResult.ok) {
+    for (const [id, bytes] of storageResult.byNamespace) {
+      ensureNs(id).storageBytes = bytes;
+    }
+  }
+
   return {
     ok: true,
     kvReads: opsResult.ok ? opsResult.kvReads : 0,
@@ -680,6 +972,7 @@ async function fetchKvMetrics(
     kvDeletes: opsResult.ok ? opsResult.kvDeletes : 0,
     kvLists: opsResult.ok ? opsResult.kvLists : 0,
     kvStorageBytes: storageResult.ok ? storageResult.kvStorageBytes : 0,
+    byNamespace,
     errors,
   };
 }
@@ -689,10 +982,31 @@ async function fetchR2Metrics(
   accountId: string,
   month: { start: string; end: string },
 ): Promise<
-  | { ok: true; r2Storage: number; r2ClassA: number; r2ClassB: number }
+  | {
+    ok: true;
+    r2Storage: number;
+    r2ClassA: number;
+    r2ClassB: number;
+    byBucket: Map<string, { storageBytes: number; classA: number; classB: number }>;
+  }
   | { ok: false; error: string }
 > {
-  const r2Query = `query R2Metrics($accountTag: String!, $monthStart: DateTime!, $monthEnd: DateTime!) {
+  const r2QueryDetailed = `query R2Metrics($accountTag: String!, $monthStart: DateTime!, $monthEnd: DateTime!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        r2StorageAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+          dimensions { bucketName datetime }
+          max { payloadSize metadataSize }
+        }
+        r2OperationsAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
+          dimensions { bucketName actionType }
+          sum { requests }
+        }
+      }
+    }
+  }`;
+
+  const r2QueryLegacy = `query R2Metrics($accountTag: String!, $monthStart: DateTime!, $monthEnd: DateTime!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
         r2StorageAdaptiveGroups(limit: 10000, filter: { datetime_geq: $monthStart, datetime_leq: $monthEnd }) {
@@ -706,31 +1020,71 @@ async function fetchR2Metrics(
     }
   }`;
 
-  const result = await safeQuery('r2', () =>
-    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, r2Query, {
-      accountTag: accountId,
-      monthStart: month.start,
-      monthEnd: month.end,
-    }),
+  const variables = {
+    accountTag: accountId,
+    monthStart: month.start,
+    monthEnd: month.end,
+  };
+
+  let result = await safeQuery('r2', () =>
+    graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, r2QueryDetailed, variables),
   );
+  let detailed = true;
+  if (!result.ok) {
+    result = await safeQuery('r2', () =>
+      graphqlRequest<{ viewer?: { accounts?: ViewerAccount[] } }>(token, r2QueryLegacy, variables),
+    );
+    detailed = false;
+  }
 
   if (!result.ok) return result;
 
   const acc = getAccount(result.data);
+  const byBucket = new Map<string, { storageBytes: number; classA: number; classB: number }>();
+  const ensureBucket = (name: string) => {
+    if (!byBucket.has(name)) {
+      byBucket.set(name, { storageBytes: 0, classA: 0, classB: 0 });
+    }
+    return byBucket.get(name)!;
+  };
+
   let r2Storage = 0;
   let r2ClassA = 0;
   let r2ClassB = 0;
+
+  const latestStorage = new Map<string, { bytes: number; datetime: string }>();
   for (const g of acc.r2StorageAdaptiveGroups ?? []) {
-    r2Storage += (g.max?.payloadSize ?? 0) + (g.max?.metadataSize ?? 0);
+    const bytes = (g.max?.payloadSize ?? 0) + (g.max?.metadataSize ?? 0);
+    const bucketName = detailed ? (g.dimensions?.bucketName ?? '') : '';
+    if (bucketName) {
+      const datetime = g.dimensions?.datetime ?? '';
+      const prev = latestStorage.get(bucketName);
+      if (!prev || datetime > prev.datetime) {
+        latestStorage.set(bucketName, { bytes, datetime });
+      }
+    } else {
+      r2Storage += bytes;
+    }
   }
+  for (const [name, { bytes }] of latestStorage) {
+    ensureBucket(name).storageBytes = bytes;
+    r2Storage += bytes;
+  }
+
   for (const g of acc.r2OperationsAdaptiveGroups ?? []) {
     const requests = g.sum?.requests ?? 0;
     const action = g.dimensions?.actionType ?? '';
+    const bucketName = detailed ? (g.dimensions?.bucketName ?? '') : '';
     if (R2_CLASS_B.has(action)) r2ClassB += requests;
     else if (R2_CLASS_A.has(action)) r2ClassA += requests;
+
+    if (!bucketName) continue;
+    const entry = ensureBucket(bucketName);
+    if (R2_CLASS_B.has(action)) entry.classB += requests;
+    else if (R2_CLASS_A.has(action)) entry.classA += requests;
   }
 
-  return { ok: true, r2Storage, r2ClassA, r2ClassB };
+  return { ok: true, r2Storage, r2ClassA, r2ClassB, byBucket };
 }
 
 async function fetchVectorizeQueried(
@@ -968,10 +1322,6 @@ async function fetchVectorizeMetrics(
   };
 }
 
-interface PagesProject {
-  name: string;
-}
-
 interface PagesDeployment {
   created_on: string;
 }
@@ -1029,11 +1379,184 @@ async function fetchPagesBuilds(
   return totalBuilds;
 }
 
+function sortResourceItems(items: ResourceUsageItem[], score: (item: ResourceUsageItem) => number): ResourceUsageItem[] {
+  return [...items].sort((a, b) => score(b) - score(a) || a.name.localeCompare(b.name));
+}
+
+function buildWorkersBreakdown(
+  scripts: Array<{ id: string; name: string }>,
+  byScript: Map<string, number>,
+): ResourceUsageItem[] {
+  const seen = new Set<string>();
+  const items: ResourceUsageItem[] = scripts.map((script) => {
+    seen.add(script.id);
+    return {
+      id: script.id,
+      name: script.name,
+      requests: byScript.get(script.id) ?? 0,
+    };
+  });
+
+  for (const [id, requests] of byScript) {
+    if (seen.has(id)) continue;
+    items.push({ id, name: id, requests });
+  }
+
+  return sortResourceItems(items, (item) => item.requests ?? 0);
+}
+
+function buildPagesBreakdown(
+  projects: Array<{ id: string; name: string }>,
+  byProject: Map<string, number>,
+): ResourceUsageItem[] {
+  const seen = new Set<string>();
+  const items: ResourceUsageItem[] = projects.map((project) => {
+    seen.add(project.id);
+    return {
+      id: project.id,
+      name: project.name,
+      requests: byProject.get(project.id) ?? 0,
+    };
+  });
+
+  for (const [id, requests] of byProject) {
+    if (seen.has(id)) continue;
+    items.push({ id, name: id, requests });
+  }
+
+  return sortResourceItems(items, (item) => item.requests ?? 0);
+}
+
+function buildD1Breakdown(
+  databases: Array<{ id: string; name: string }>,
+  byDatabase: Map<string, { reads: number; writes: number; storageBytes: number }>,
+): ResourceUsageItem[] {
+  const seen = new Set<string>();
+  const items: ResourceUsageItem[] = databases.map((db) => {
+    seen.add(db.id);
+    const usage = byDatabase.get(db.id);
+    return {
+      id: db.id,
+      name: db.name,
+      reads: usage?.reads ?? 0,
+      writes: usage?.writes ?? 0,
+      storageBytes: usage?.storageBytes ?? 0,
+    };
+  });
+
+  for (const [id, usage] of byDatabase) {
+    if (seen.has(id)) continue;
+    items.push({
+      id,
+      name: id,
+      reads: usage.reads,
+      writes: usage.writes,
+      storageBytes: usage.storageBytes,
+    });
+  }
+
+  return sortResourceItems(items, (item) => (item.reads ?? 0) + (item.writes ?? 0) + (item.storageBytes ?? 0));
+}
+
+function buildKvBreakdown(
+  namespaces: Array<{ id: string; name: string }>,
+  byNamespace: Map<string, {
+    reads: number;
+    writes: number;
+    deletes: number;
+    lists: number;
+    storageBytes: number;
+  }>,
+): ResourceUsageItem[] {
+  const seen = new Set<string>();
+  const items: ResourceUsageItem[] = namespaces.map((ns) => {
+    seen.add(ns.id);
+    const usage = byNamespace.get(ns.id);
+    return {
+      id: ns.id,
+      name: ns.name,
+      reads: usage?.reads ?? 0,
+      writes: usage?.writes ?? 0,
+      deletes: usage?.deletes ?? 0,
+      lists: usage?.lists ?? 0,
+      storageBytes: usage?.storageBytes ?? 0,
+    };
+  });
+
+  for (const [id, usage] of byNamespace) {
+    if (seen.has(id)) continue;
+    items.push({
+      id,
+      name: id,
+      reads: usage.reads,
+      writes: usage.writes,
+      deletes: usage.deletes,
+      lists: usage.lists,
+      storageBytes: usage.storageBytes,
+    });
+  }
+
+  return sortResourceItems(
+    items,
+    (item) => (item.reads ?? 0) + (item.writes ?? 0) + (item.storageBytes ?? 0),
+  );
+}
+
+function normalizeR2BucketKey(name: string): string {
+  return name.replace(/^(eu|fedramp)_(.+)$/i, '$2');
+}
+
+function buildR2Breakdown(
+  buckets: Array<{ name: string }>,
+  byBucket: Map<string, { storageBytes: number; classA: number; classB: number }>,
+): ResourceUsageItem[] {
+  const usageByKey = new Map<string, { storageBytes: number; classA: number; classB: number }>();
+  for (const [name, usage] of byBucket) {
+    const key = normalizeR2BucketKey(name);
+    const prev = usageByKey.get(key) ?? { storageBytes: 0, classA: 0, classB: 0 };
+    usageByKey.set(key, {
+      storageBytes: prev.storageBytes + usage.storageBytes,
+      classA: prev.classA + usage.classA,
+      classB: prev.classB + usage.classB,
+    });
+  }
+
+  const seen = new Set<string>();
+  const items: ResourceUsageItem[] = buckets.map((bucket) => {
+    const key = normalizeR2BucketKey(bucket.name);
+    seen.add(key);
+    const usage = usageByKey.get(key);
+    return {
+      id: bucket.name,
+      name: bucket.name,
+      storageBytes: usage?.storageBytes ?? 0,
+      classA: usage?.classA ?? 0,
+      classB: usage?.classB ?? 0,
+    };
+  });
+
+  for (const [key, usage] of usageByKey) {
+    if (seen.has(key)) continue;
+    items.push({
+      id: key,
+      name: key,
+      storageBytes: usage.storageBytes,
+      classA: usage.classA,
+      classB: usage.classB,
+    });
+  }
+
+  return sortResourceItems(
+    items,
+    (item) => (item.storageBytes ?? 0) + (item.classA ?? 0) + (item.classB ?? 0),
+  );
+}
+
 async function fetchAllMetrics(
   token: string,
   accountId: string,
   limits: FreeTierLimitsConfig,
-): Promise<{ quotas: QuotasMap; partialErrors: string[]; serviceStatus: ServiceStatusMap }> {
+): Promise<{ quotas: QuotasMap; partialErrors: string[]; serviceStatus: ServiceStatusMap; resourceBreakdown: ResourceBreakdown }> {
   const ranges = getUtcRanges();
   const partialErrors: string[] = [];
 
@@ -1049,11 +1572,15 @@ async function fetchAllMetrics(
     nowIso,
   );
 
+  const requestMetricsResult = await fetchRequestMetrics(token, accountId, ranges.day);
+  const workerScriptsResult = await fetchWorkerScripts(token, accountId);
+  const pagesProjectsResult = await fetchPagesProjects(token, accountId);
+
   const d1Result = await fetchD1Metrics(token, accountId, ranges.day, ranges.month);
-  const d1DatabasesResult = await fetchD1DatabaseCount(token, accountId);
-  const kvNamespacesResult = await fetchKvNamespaceCount(token, accountId);
+  const d1DatabasesResult = await fetchD1Databases(token, accountId);
+  const kvNamespacesResult = await fetchKvNamespaces(token, accountId);
   const kvResult = await fetchKvMetrics(token, accountId, ranges.dayDate, ranges.monthDate);
-  const r2BucketsResult = await fetchR2BucketCount(token, accountId);
+  const r2BucketsResult = await fetchR2Buckets(token, accountId);
   const r2Result = await fetchR2Metrics(token, accountId, ranges.month);
   const vectorizeResult = await fetchVectorizeMetrics(token, accountId, ranges.month.start, nowIso);
 
@@ -1061,6 +1588,7 @@ async function fetchAllMetrics(
     fetchPagesBuilds(token, accountId, ranges.month.start, nowIso),
   );
 
+  if (!requestMetricsResult.ok) partialErrors.push(requestMetricsResult.error);
   if (!d1Result.ok) partialErrors.push(d1Result.error);
   if (!kvResult.ok) partialErrors.push(kvResult.error);
   else if (kvResult.errors.length) partialErrors.push(...kvResult.errors);
@@ -1071,11 +1599,8 @@ async function fetchAllMetrics(
   const kvOpsOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-ops'));
   const kvStorageOk = kvResult.ok && !kvResult.errors.some((e) => e.startsWith('kv-storage'));
 
-  const workersRequests = acc.workersInvocationsAdaptive?.[0]?.sum?.requests ?? 0;
-  const pagesRequests = sumGroups(
-    acc.pagesFunctionsInvocationsAdaptiveGroups,
-    (g) => g.sum?.requests,
-  );
+  const workersRequests = requestMetricsResult.ok ? requestMetricsResult.workersRequests : 0;
+  const pagesRequests = requestMetricsResult.ok ? requestMetricsResult.pagesRequests : 0;
 
   const queuesOps = sumGroups(
     acc.queueMessageOperationsAdaptiveGroups,
@@ -1102,7 +1627,13 @@ async function fetchAllMetrics(
   const doSqlStorage = sumGroups(acc.durableObjectsSqlStorageGroups, (g) => g.max?.storedBytes);
 
   const quotas: QuotasMap = {
-    workers_requests: buildMetric('workers_requests', workersRequests, limits.workers_requests),
+    workers_requests: buildMetric(
+      'workers_requests',
+      workersRequests,
+      limits.workers_requests,
+      requestMetricsResult.ok,
+      requestMetricsResult.ok ? undefined : metricNote('requests', partialErrors),
+    ),
     d1_reads: buildMetric(
       'd1_reads',
       d1Result.ok ? d1Result.d1Reads : 0,
@@ -1126,7 +1657,7 @@ async function fetchAllMetrics(
     ),
     d1_databases: buildMetric(
       'd1_databases',
-      d1DatabasesResult.ok ? d1DatabasesResult.count : 0,
+      d1DatabasesResult.ok ? d1DatabasesResult.databases.length : 0,
       limits.d1_databases,
       d1DatabasesResult.ok,
       d1DatabasesResult.ok
@@ -1170,7 +1701,7 @@ async function fetchAllMetrics(
     ),
     kv_namespaces: buildMetric(
       'kv_namespaces',
-      kvNamespacesResult.ok ? kvNamespacesResult.count : 0,
+      kvNamespacesResult.ok ? kvNamespacesResult.namespaces.length : 0,
       limits.kv_namespaces,
       kvNamespacesResult.ok,
       kvNamespacesResult.ok
@@ -1223,7 +1754,13 @@ async function fetchAllMetrics(
         ? undefined
         : 'Workers Builds minutes unavailable via GraphQL for this account',
     ),
-    pages_requests: buildMetric('pages_requests', pagesRequests, limits.pages_requests),
+    pages_requests: buildMetric(
+      'pages_requests',
+      pagesRequests,
+      limits.pages_requests,
+      requestMetricsResult.ok,
+      requestMetricsResult.ok ? undefined : metricNote('requests', partialErrors),
+    ),
     ai_neurons: buildMetric('ai_neurons', aiNeurons, limits.ai_neurons),
     queues_ops: buildMetric('queues_ops', queuesOps, limits.queues_ops),
     vectorize_queried_dims: buildMetric(
@@ -1255,10 +1792,47 @@ async function fetchAllMetrics(
     analytics_engine_writes: buildMetric('analytics_engine_writes', analyticsWrites, limits.analytics_engine_writes),
   };
 
+  const resourceBreakdown: ResourceBreakdown = {};
+  if (requestMetricsResult.ok) {
+    if (workerScriptsResult.ok && workerScriptsResult.scripts.length > 0) {
+      resourceBreakdown.workers = buildWorkersBreakdown(
+        workerScriptsResult.scripts,
+        requestMetricsResult.byScript,
+      );
+    } else if (requestMetricsResult.byScript.size > 0) {
+      resourceBreakdown.workers = buildWorkersBreakdown(
+        [...requestMetricsResult.byScript.keys()].map((name) => ({ id: name, name })),
+        requestMetricsResult.byScript,
+      );
+    }
+
+    if (pagesProjectsResult.ok && pagesProjectsResult.projects.length > 0) {
+      resourceBreakdown.pages = buildPagesBreakdown(
+        pagesProjectsResult.projects,
+        requestMetricsResult.byProject,
+      );
+    } else if (requestMetricsResult.byProject.size > 0) {
+      resourceBreakdown.pages = buildPagesBreakdown(
+        [...requestMetricsResult.byProject.keys()].map((name) => ({ id: name, name })),
+        requestMetricsResult.byProject,
+      );
+    }
+  }
+  if (d1DatabasesResult.ok && d1Result.ok && d1DatabasesResult.databases.length > 0) {
+    resourceBreakdown.d1 = buildD1Breakdown(d1DatabasesResult.databases, d1Result.byDatabase);
+  }
+  if (kvNamespacesResult.ok && kvResult.ok && kvNamespacesResult.namespaces.length > 0) {
+    resourceBreakdown.kv = buildKvBreakdown(kvNamespacesResult.namespaces, kvResult.byNamespace);
+  }
+  if (r2BucketsResult.ok && r2Result.ok && r2BucketsResult.buckets.length > 0) {
+    resourceBreakdown.r2 = buildR2Breakdown(r2BucketsResult.buckets, r2Result.byBucket);
+  }
+
   return {
     quotas,
     partialErrors,
     serviceStatus: { r2: r2BucketsResult.activation },
+    resourceBreakdown,
   };
 }
 
@@ -1270,7 +1844,7 @@ export async function fetchAccountQuotas(
 ): Promise<AccountSnapshot> {
   const limits = resolveFreeTierLimits(limitsJson);
   try {
-    const { quotas, partialErrors, serviceStatus } = await fetchAllMetrics(token, accountId, limits);
+    const { quotas, partialErrors, serviceStatus, resourceBreakdown } = await fetchAllMetrics(token, accountId, limits);
     const hasAvailable = Object.values(quotas).some((q) => q.available);
     return {
       accountId,
@@ -1278,6 +1852,7 @@ export async function fetchAccountQuotas(
       status: hasAvailable ? 'ok' : 'error',
       error: partialErrors.length ? partialErrors.join('; ') : undefined,
       quotas,
+      resourceBreakdown,
       serviceStatus,
       lastCheckTime: new Date().toISOString(),
     };

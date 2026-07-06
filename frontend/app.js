@@ -63,6 +63,26 @@ const PERIOD_ZH = { daily: '今日', monthly: '本月', total: '总计' };
 
 const SERVICE_GROUPS = [
   {
+    id: 'workers',
+    title: 'Workers',
+    keys: ['workers_requests', 'workers_build_minutes'],
+    metaFn: (quotas, resourceBreakdown) => {
+      const count = resourceBreakdown?.workers?.length;
+      if (count) return `${count.toLocaleString()} 个 Worker`;
+      return '';
+    },
+  },
+  {
+    id: 'pages',
+    title: 'Pages',
+    keys: ['pages_requests', 'pages_builds'],
+    metaFn: (quotas, resourceBreakdown) => {
+      const count = resourceBreakdown?.pages?.length;
+      if (count) return `${count.toLocaleString()} 个项目`;
+      return '';
+    },
+  },
+  {
     id: 'kv',
     title: 'KV',
     keys: ['kv_reads', 'kv_writes', 'kv_deletes', 'kv_lists', 'kv_storage_gb'],
@@ -118,6 +138,8 @@ const METRIC_ICONS = {
 };
 
 const SERVICE_ICONS = {
+  workers: '🔶',
+  pages: '⚡',
   kv: '🔑',
   d1: '🗄️',
   r2: '☁️',
@@ -133,7 +155,7 @@ const GROUP_ICONS = {
 const OTHER_GROUPS = [
   {
     title: '计算与运行时',
-    keys: ['workers_build_minutes', 'pages_builds', 'workers_requests', 'browser_minutes', 'ai_neurons'],
+    keys: ['browser_minutes', 'ai_neurons'],
   },
   {
     title: 'Durable Objects',
@@ -506,6 +528,54 @@ function formatQuotaMeta(metric) {
   return `${used} / ${limit} · ${metric.pct}% · ${period}`;
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1_073_741_824) return `${(value / 1_073_741_824).toFixed(3)} GB`;
+  if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(2)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value.toLocaleString()} B`;
+}
+
+function formatResourceStats(serviceId, item) {
+  const parts = [];
+  if (serviceId === 'workers' || serviceId === 'pages') {
+    parts.push(`请求 ${(item.requests ?? 0).toLocaleString()}`);
+  }
+  if (serviceId === 'd1' || serviceId === 'kv') {
+    if (item.reads) parts.push(`读 ${item.reads.toLocaleString()}`);
+    if (item.writes) parts.push(`写 ${item.writes.toLocaleString()}`);
+  }
+  if (serviceId === 'kv') {
+    if (item.deletes) parts.push(`删 ${item.deletes.toLocaleString()}`);
+    if (item.lists) parts.push(`列 ${item.lists.toLocaleString()}`);
+  }
+  if (serviceId === 'r2') {
+    if (item.storageBytes) parts.push(`存储 ${formatBytes(item.storageBytes)}`);
+    if (item.classA) parts.push(`A ${item.classA.toLocaleString()}`);
+    if (item.classB) parts.push(`B ${item.classB.toLocaleString()}`);
+  } else if (item.storageBytes) {
+    parts.push(`存储 ${formatBytes(item.storageBytes)}`);
+  }
+  return parts.length ? parts.join(' · ') : '暂无用量';
+}
+
+function renderResourceBreakdown(serviceId, items) {
+  if (!items?.length) return '';
+  const rows = items.map((item) => `
+    <li class="resource-breakdown__item">
+      <span class="resource-breakdown__name" title="${escapeHtml(item.id)}">${escapeHtml(item.name)}</span>
+      <span class="resource-breakdown__stats">${escapeHtml(formatResourceStats(serviceId, item))}</span>
+    </li>
+  `).join('');
+
+  return `
+    <details class="resource-breakdown">
+      <summary class="resource-breakdown__summary">按资源明细（${items.length}）</summary>
+      <ul class="resource-breakdown__list">${rows}</ul>
+    </details>
+  `;
+}
+
 function renderMetricRingCard(metricKey, metric, ringSize = 48, overrides = {}) {
   const showWhenUnavailable = overrides.showWhenUnavailable ?? false;
   if (!showWhenUnavailable && !metric?.available) return '';
@@ -595,7 +665,7 @@ function renderServiceCardHead(group, metaHtml = '') {
       </div>`;
 }
 
-function renderServiceCard(group, quotas, serviceStatus) {
+function renderServiceCard(group, quotas, serviceStatus, resourceBreakdown) {
   const activation = group.id ? serviceStatus?.[group.id] : undefined;
   if (activation === 'not_activated') {
     return `
@@ -610,19 +680,23 @@ function renderServiceCard(group, quotas, serviceStatus) {
     .filter(Boolean)
     .join('');
   if (!rows) return '';
-  const meta = group.metaFn?.(quotas);
+  const meta = group.metaFn?.(quotas, resourceBreakdown);
   const metaHtml = meta ? `<span class="service-card__meta">${meta}</span>` : '';
+  const breakdownHtml = group.id
+    ? renderResourceBreakdown(group.id, resourceBreakdown?.[group.id])
+    : '';
   return `
     <div class="service-card">
       ${renderServiceCardHead(group, metaHtml)}
       ${rows}
+      ${breakdownHtml}
     </div>
   `;
 }
 
-function renderServiceSection(quotas, serviceStatus, collapsible = false) {
+function renderServiceSection(quotas, serviceStatus, collapsible = false, resourceBreakdown) {
   const cards = [...SERVICE_GROUPS, ...OTHER_GROUPS]
-    .map((g) => renderServiceCard(g, quotas, serviceStatus))
+    .map((g) => renderServiceCard(g, quotas, serviceStatus, resourceBreakdown))
     .filter(Boolean)
     .join('');
   if (!cards) return '';
@@ -632,7 +706,7 @@ function renderServiceSection(quotas, serviceStatus, collapsible = false) {
     <details class="quota-details">
       <summary class="quota-details__summary">
         <span class="quota-details__title">资源额度细节</span>
-        <span class="quota-details__meta">KV / D1 / R2</span>
+        <span class="quota-details__meta">Workers / Pages / KV / D1 / R2</span>
       </summary>
       <div class="quota-details__body">${inner}</div>
     </details>
@@ -642,7 +716,7 @@ function renderServiceSection(quotas, serviceStatus, collapsible = false) {
 function renderAccountDetails(account) {
   if (!account.quotas || account.status !== 'ok') return '';
 
-  const body = renderServiceSection(account.quotas, account.serviceStatus, false);
+  const body = renderServiceSection(account.quotas, account.serviceStatus, false, account.resourceBreakdown);
   if (!body) return '';
 
   return `
